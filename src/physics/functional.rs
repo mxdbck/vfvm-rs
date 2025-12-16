@@ -38,7 +38,7 @@ impl Default for NumericalTolerances {
 /// `T` is the numeric type (e.g., `f64` or `DualDVec64`) and `D` is a generic
 /// type for any user-defined data/parameters struct.
 pub struct FunctionalPhysics<T, D> {
-    pub num_vars: usize,
+    pub num_vars_per_cell: usize,
     pub data: D,
     pub(crate) flux: FluxFn<T, D>,
     pub reaction: ReactionFn<T, D>,
@@ -68,7 +68,7 @@ where
     ) -> Self {
         let num_vars = field_names.len();
         Self {
-            num_vars,
+            num_vars_per_cell: num_vars,
             data,
             flux,
             reaction,
@@ -197,7 +197,7 @@ where
         let delta = Self::bc_delta(face.centroid, cell_centroid, n);
         let t = self.current_time.unwrap_or(0.0);
 
-        (0..self.num_vars)
+        (0..self.num_vars_per_cell)
             .map(|j| {
                 let field = &self.field_names[j];
                 if let Some(rule) = self.bc_registry.find_for(field.0.as_ref(), label, p, n) {
@@ -214,16 +214,16 @@ where
 
     /// Compute the residual contribution from all fluxes across faces.
     fn flux_contribution(&self, mesh: &Mesh, u: &DVector<T>) -> DVector<T> {
-        let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars);
-        let mut f_flux = DVector::from_vec(vec![T::zero(); self.num_vars]);
+        let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
+        let mut f_flux = DVector::from_vec(vec![T::zero(); self.num_vars_per_cell]);
 
         for (face_idx, face) in mesh.faces.iter().enumerate() {
             match face.neighbor_cell_ids {
                 (k, Some(l)) => {
                     // Interior cell
-                    let u_k = u.rows(k * self.num_vars, self.num_vars);
+                    let u_k = u.rows(k * self.num_vars_per_cell, self.num_vars_per_cell);
                     // Exterior cell
-                    let u_l = u.rows(l * self.num_vars, self.num_vars);
+                    let u_l = u.rows(l * self.num_vars_per_cell, self.num_vars_per_cell);
 
                     f_flux.fill(T::zero());
                     (self.flux)(
@@ -237,10 +237,10 @@ where
                     let d = self.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
                     let scale = Self::face_scale(face, d);
 
-                    for i in 0..self.num_vars {
+                    for i in 0..self.num_vars_per_cell {
                         let flux_val = f_flux[i].clone() * scale;
-                        residual[k * self.num_vars + i] += flux_val.clone();
-                        residual[l * self.num_vars + i] -= flux_val;
+                        residual[k * self.num_vars_per_cell + i] += flux_val.clone();
+                        residual[l * self.num_vars_per_cell + i] -= flux_val;
                     }
                 }
                 // Boundary cell
@@ -248,7 +248,7 @@ where
                     let Some(label) = self.face_tags.get(&face_idx) else {
                         continue;
                     };
-                    let u_k = u.rows(k * self.num_vars, self.num_vars);
+                    let u_k = u.rows(k * self.num_vars_per_cell, self.num_vars_per_cell);
 
                     let ghost = self.compute_ghost_values(
                         u_k.as_slice(),
@@ -269,8 +269,8 @@ where
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
                     let scale = Self::face_scale(face, d);
 
-                    for i in 0..self.num_vars {
-                        residual[k * self.num_vars + i] += f_flux[i].clone() * scale;
+                    for i in 0..self.num_vars_per_cell {
+                        residual[k * self.num_vars_per_cell + i] += f_flux[i].clone() * scale;
                     }
                 }
             }
@@ -281,11 +281,11 @@ where
 
     /// Compute the residual contribution from reactions/sources within each cell.
     fn reaction_contribution(&self, mesh: &Mesh, u: &DVector<T>) -> DVector<T> {
-        let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars);
-        let mut f_reaction = DVector::from_vec(vec![T::zero(); self.num_vars]);
+        let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
+        let mut f_reaction = DVector::from_vec(vec![T::zero(); self.num_vars_per_cell]);
 
         for cell in &mesh.cells {
-            let u_cell = u.rows(cell.id * self.num_vars, self.num_vars);
+            let u_cell = u.rows(cell.id * self.num_vars_per_cell, self.num_vars_per_cell);
 
             f_reaction.fill(T::zero());
 
@@ -296,8 +296,8 @@ where
                 &self.data,
             );
 
-            for i in 0..self.num_vars {
-                residual[cell.id * self.num_vars + i] += f_reaction[i].clone() * cell.volume;
+            for i in 0..self.num_vars_per_cell {
+                residual[cell.id * self.num_vars_per_cell + i] += f_reaction[i].clone() * cell.volume;
             }
         }
 
@@ -305,11 +305,11 @@ where
     }
 
     pub fn storage_contribution(&self, mesh: &Mesh, u: &DVector<T>) -> DVector<T> {
-        let mut s_vec = DVector::zeros(mesh.cells.len() * self.num_vars);
-        let mut f_storage = DVector::from_vec(vec![T::zero(); self.num_vars]);
+        let mut s_vec = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
+        let mut f_storage = DVector::from_vec(vec![T::zero(); self.num_vars_per_cell]);
 
         for cell in &mesh.cells {
-            let u_cell = u.rows(cell.id * self.num_vars, self.num_vars);
+            let u_cell = u.rows(cell.id * self.num_vars_per_cell, self.num_vars_per_cell);
 
             f_storage.fill(T::zero());
 
@@ -320,8 +320,8 @@ where
                 &self.data,
             );
 
-            for i in 0..self.num_vars {
-                s_vec[cell.id * self.num_vars + i] += f_storage[i].clone() * cell.volume;
+            for i in 0..self.num_vars_per_cell {
+                s_vec[cell.id * self.num_vars_per_cell + i] += f_storage[i].clone() * cell.volume;
             }
         }
         s_vec

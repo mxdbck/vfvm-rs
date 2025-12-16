@@ -11,7 +11,7 @@ where
     /// Compute only the r-th residual component (row kernel).
     /// r corresponds to (cell_id, var) with var in [0..num_vars).
     pub fn residual_component_row(&self, mesh: &Mesh, u: &[T], r: usize) -> T {
-        let m = self.num_vars;
+        let m = self.num_vars_per_cell;
         let cell_id = r / m;
         let var = r % m;
 
@@ -97,7 +97,7 @@ where
     /// Seed dual numbers for a single cell (local dimension m).
     #[inline]
     fn seed_cell_dual(&self, u: &[f64], cell: usize) -> Vec<DualDVec64> {
-        let m = self.num_vars;
+        let m = self.num_vars_per_cell;
         (0..m)
             .map(|j| {
                 let eps = Derivative::derivative_generic(Dyn(m), U1, j);
@@ -115,7 +115,7 @@ where
         left: usize,
         right: usize,
     ) -> (Vec<DualDVec64>, Vec<DualDVec64>) {
-        let m = self.num_vars;
+        let m = self.num_vars_per_cell;
         let mut ul = Vec::with_capacity(m);
         let mut ur = Vec::with_capacity(m);
         for j in 0..m {
@@ -161,12 +161,14 @@ where
 
     /// Build Jacobian row r = (cell_id,var) as (cols, vals) with local AD.
     pub fn jacobian_row_locals(&self, mesh: &Mesh, u: &[f64], r: usize) -> (Vec<usize>, Vec<f64>) {
-        let m = self.num_vars;
+        let m = self.num_vars_per_cell;
         let cell_id = r / m;
         let var = r % m;
 
         let mut cols: Vec<usize> = Vec::with_capacity(8 * m);
         let mut vals: Vec<f64> = Vec::with_capacity(8 * m);
+
+        let mut diag_accumulator = vec![0.0; m];
 
         // (A) reaction/source contribution
         {
@@ -176,7 +178,10 @@ where
 
             let rd = f[var].clone() * mesh.cells[cell_id].volume;
             let deriv = rd.eps.unwrap_generic(Dyn(m), U1);
-            push_block_view(&mut cols, &mut vals, cell_id, &deriv, m);
+            // push_block_view(&mut cols, &mut vals, cell_id, &deriv, m);
+            for j in 0..m {
+                diag_accumulator[j] += deriv[(j, 0)];
+            }
         }
 
         // (B) flux contributions on faces touching this cell
@@ -200,11 +205,25 @@ where
                     }
 
                     let d_eps = rd.eps.unwrap_generic(Dyn(2 * m), U1);
-                    push_block_view(&mut cols, &mut vals, k, &d_eps.rows(0, m), m);
-                    push_block_view(&mut cols, &mut vals, l, &d_eps.rows(m, m), m);
+
+                    if cell_id == k {
+                        for j in 0..m {
+                            diag_accumulator[j] += d_eps[(j, 0)];
+                        }
+                        push_block_view(&mut cols, &mut vals, l, &d_eps.rows(m, m), m);
+                    } else if cell_id == l {
+                        for j in 0..m {
+                            diag_accumulator[j] += d_eps[(m + j, 0)];
+                        }
+                        push_block_view(&mut cols, &mut vals, k, &d_eps.rows(0, m), m);
+                    }
+
+                    // push_block_view(&mut cols, &mut vals, k, &d_eps.rows(0, m), m);
+                    // push_block_view(&mut cols, &mut vals, l, &d_eps.rows(m, m), m);
                 }
                 (k, None) => {
                     if k != cell_id {
+                        println!("This is kinda weird");
                         continue;
                     }
                     let Some(label) = self.face_tags.get(&face_idx) else {
@@ -221,8 +240,18 @@ where
                     let rd = f[var].clone() * Self::face_scale(face, d);
                     let deriv = rd.eps.unwrap_generic(Dyn(m), U1);
 
-                    push_block_view(&mut cols, &mut vals, k, &deriv, m);
+                    // push_block_view(&mut cols, &mut vals, k, &deriv, m);
+                    for j in 0..m {
+                        diag_accumulator[j] += deriv[(j, 0)];
+                    }
                 }
+            }
+        }
+
+        for j in 0..m {
+            if diag_accumulator[j] != 0.0 {
+                cols.push(cell_id * m + j);
+                vals.push(diag_accumulator[j]);
             }
         }
 

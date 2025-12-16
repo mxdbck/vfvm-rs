@@ -166,7 +166,7 @@ fn calculate_equilibrium_psi(c: f64, ni: f64) -> f64 {
 
 impl PhysicsModel<DualDVec64> for PnJunctionModel {
     fn num_variables(&self) -> usize {
-        self.functional.num_vars
+        self.functional.num_vars_per_cell
     }
 
     fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> {

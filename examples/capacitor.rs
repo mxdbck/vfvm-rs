@@ -38,7 +38,7 @@ impl CapacitorModel {
 
 impl PhysicsModel<DualDVec64> for CapacitorModel {
     fn num_variables(&self) -> usize {
-        self.physics.num_vars
+        self.physics.num_vars_per_cell
     }
 
     fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> {

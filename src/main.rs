@@ -17,7 +17,7 @@ use std::fs;
 fn main() {
     fs::create_dir_all("output/main").expect("Failed to create output directory");
 
-    let (mesh, params) = models::pn::pn::pn_problem_def(1.0, 300, true);
+    let (mesh, params) = models::pn::pn::pn_problem_def(1.0, 500, true);
     let (v_scale, ni_norm, n_scale) = (params.v_scale, params.ni_norm, params.n_scale);
 
     let mut model = PnJunctionModel::new(params.clone(), 1e-4, true).with_mesh(&mesh);
@@ -28,22 +28,22 @@ fn main() {
     let initial_guess = model.initial_condition(&mesh);
     save_initial_guess(&mesh, &initial_guess);
 
-    let dense_result = solve_dense(&model, &mesh, initial_guess.clone());
+    // let dense_result = solve_dense(&model, &mesh, initial_guess.clone());
     let sparse_result = solve_sparse(&model, &mesh, initial_guess);
 
-    if let Some(ref result) = dense_result {
-        summary.add_dense_solver_info(result.iterations, result.final_residual);
-        save_solution(&mesh, &result.solution, v_scale, ni_norm, n_scale);
-    }
+    // if let Some(ref result) = dense_result {
+    //     summary.add_dense_solver_info(result.iterations, result.final_residual);
+    //     save_solution(&mesh, &result.solution, v_scale, ni_norm, n_scale);
+    // }
 
     if let Some(ref result) = sparse_result {
         summary.add_sparse_solver_info(result.iterations, result.final_residual);
     }
 
-    if let (Some(dense), Some(sparse)) = (dense_result.as_ref(), sparse_result.as_ref()) {
-        summary.add_comparison(&dense.solution, &sparse.solution);
-        compare_solutions(&dense.solution, &sparse.solution);
-    }
+    // if let (Some(dense), Some(sparse)) = (dense_result.as_ref(), sparse_result.as_ref()) {
+    //     summary.add_comparison(&dense.solution, &sparse.solution);
+    //     compare_solutions(&dense.solution, &sparse.solution);
+    // }
 
     summary
         .write_to_file("output/main/simulation_summary.txt")
