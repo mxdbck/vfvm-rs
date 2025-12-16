@@ -1,0 +1,30 @@
+[package]
+name = "vfvm-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Version of glam used by meshless_voronoi
+glam = "0.27"
+meshless_voronoi = "0.7.2"
+nalgebra = "0.33.0"
+num-dual = "0.11.2"
+num-traits = "0.2"
+plotters = "0.3.7"
+thiserror = "2.0.16"
+sprs = "0.11.3"
+kryst = { version = "2.4.0", default-features = false, features = ["rayon", "logging"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { version = "0.7", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmarks"
+harness = false
+
+[features]
+timing = []
+
+[dependencies.libffi-sys]
+version = "2.3.0"
+features = ["system"]
