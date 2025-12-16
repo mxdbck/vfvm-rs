@@ -224,15 +224,41 @@ impl SparseNewtonSolver {
         let mut data = Vec::new();
         indptr.push(0);
 
+        let m = model.num_vars_per_cell;
+        let mut cols_reuse: Vec<usize> = Vec::with_capacity(8 * m);
+        let mut vals_reuse: Vec<f64> = Vec::with_capacity(8 * m);
+        let mut diag_reuse: Vec<f64> = Vec::with_capacity(m);
+
         // dual representation for residual evaluation
         let u_dual: Vec<DualDVec64> = u.iter().map(|&x| DualDVec64::from_re(x)).collect();
         let u_slice = u.as_slice();
 
         for r in 0..n {
             residual[r] = model.residual_component_row(mesh, &u_dual, r).re;
-            let (cols, vals) = model.jacobian_row_locals(mesh, u_slice, r);
-            indices.extend(cols);
-            data.extend(vals);
+
+            cols_reuse.clear();
+            vals_reuse.clear();
+            diag_reuse.clear();
+
+            diag_reuse.resize(m, 0.0);
+            diag_reuse.fill(0.0);
+
+            model.jacobian_row_locals(
+                mesh,
+                u_slice,
+                r,
+                &mut cols_reuse,
+                &mut vals_reuse,
+                &mut diag_reuse
+            );
+
+
+            // let (cols, vals) = model.jacobian_row_locals(mesh, u_slice, r);
+            // indices.extend(cols);
+            // data.extend(vals);
+            // indptr.push(indices.len());
+            indices.extend_from_slice(&cols_reuse);
+            data.extend_from_slice(&vals_reuse);
             indptr.push(indices.len());
         }
 

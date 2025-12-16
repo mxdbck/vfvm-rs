@@ -130,45 +130,78 @@ where
     /// Combine duplicate column indices by summing their values.
     /// Returns deduplicated (cols, vals) sorted by column index.
     #[inline]
-    fn combine_duplicates(cols: Vec<usize>, vals: Vec<f64>) -> (Vec<usize>, Vec<f64>) {
+    fn combine_duplicates(cols: &mut Vec<usize>, vals: &mut Vec<f64>) {
         if cols.len() <= 1 {
-            return (cols, vals);
+            return;
         }
 
-        let mut idx: Vec<usize> = (0..cols.len()).collect();
-        idx.sort_unstable_by_key(|&i| cols[i]);
+        let mut p: Vec<usize> = (0..cols.len()).collect();
+        p.sort_unstable_by_key(|&i| cols[i]);
 
-        let mut result_cols = Vec::with_capacity(cols.len());
-        let mut result_vals = Vec::with_capacity(vals.len());
+        // let mut result_cols = Vec::with_capacity(cols.len());
+        // let mut result_vals = Vec::with_capacity(vals.len());
 
-        let mut i = 0;
-        while i < idx.len() {
-            let col = cols[idx[i]];
-            let mut sum = vals[idx[i]];
-            i += 1;
+        // let mut i = 0;
+        // while i < idx.len() {
+        //     let col = cols[idx[i]];
+        //     let mut sum = vals[idx[i]];
+        //     i += 1;
 
-            while i < idx.len() && cols[idx[i]] == col {
-                sum += vals[idx[i]];
-                i += 1;
+        //     while i < idx.len() && cols[idx[i]] == col {
+        //         sum += vals[idx[i]];
+        //         i += 1;
+        //     }
+
+        //     result_cols.push(col);
+        //     result_vals.push(sum);
+        // }
+
+        let sorted_cols: Vec<usize> = p.iter().map(|&i| cols[i]).collect();
+        let sorted_vals: Vec<f64> = p.iter().map(|&i| vals[i]).collect();
+
+        // 2. Compress (Deduplicate)
+        cols.clear();
+        vals.clear();
+
+        if sorted_cols.is_empty() {
+            return;
+        }
+
+        let mut curr_col = sorted_cols[0];
+        let mut curr_sum = sorted_vals[0];
+
+        for i in 1..sorted_cols.len() {
+            if sorted_cols[i] == curr_col {
+                curr_sum += sorted_vals[i];
+            } else {
+                cols.push(curr_col);
+                vals.push(curr_sum);
+                curr_col = sorted_cols[i];
+                curr_sum = sorted_vals[i];
             }
-
-            result_cols.push(col);
-            result_vals.push(sum);
         }
-
-        (result_cols, result_vals)
+        cols.push(curr_col);
+        vals.push(curr_sum);
     }
 
     /// Build Jacobian row r = (cell_id,var) as (cols, vals) with local AD.
-    pub fn jacobian_row_locals(&self, mesh: &Mesh, u: &[f64], r: usize) -> (Vec<usize>, Vec<f64>) {
+    pub fn jacobian_row_locals(
+        &self,
+        mesh: &Mesh,
+        u: &[f64],
+        r: usize,
+        cols: &mut Vec<usize>,
+        vals: &mut Vec<f64>,
+        diag_accumulator: &mut Vec<f64>,
+    ) {
         let m = self.num_vars_per_cell;
         let cell_id = r / m;
         let var = r % m;
 
-        let mut cols: Vec<usize> = Vec::with_capacity(8 * m);
-        let mut vals: Vec<f64> = Vec::with_capacity(8 * m);
+        // let mut cols: Vec<usize> = Vec::with_capacity(8 * m);
+        // let mut vals: Vec<f64> = Vec::with_capacity(8 * m);
 
-        let mut diag_accumulator = vec![0.0; m];
+        // let mut diag_accumulator = vec![0.0; m];
 
         // (A) reaction/source contribution
         {
@@ -210,12 +243,12 @@ where
                         for j in 0..m {
                             diag_accumulator[j] += d_eps[(j, 0)];
                         }
-                        push_block_view(&mut cols, &mut vals, l, &d_eps.rows(m, m), m);
+                        push_block_view(cols, vals, l, &d_eps.rows(m, m), m);
                     } else if cell_id == l {
                         for j in 0..m {
                             diag_accumulator[j] += d_eps[(m + j, 0)];
                         }
-                        push_block_view(&mut cols, &mut vals, k, &d_eps.rows(0, m), m);
+                        push_block_view(cols, vals, k, &d_eps.rows(0, m), m);
                     }
 
                     // push_block_view(&mut cols, &mut vals, k, &d_eps.rows(0, m), m);

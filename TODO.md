@@ -24,6 +24,7 @@
 - [ ] Make documents that explains the code and more complex bits. 
 - [ ] Look into Schaffeter-Gummel from WIAS paper
 - [ ] Look into adaptive time stepping.
+- [ ] Add some line search to dense solver too.
 - [ ] Consider adding a method to validate that all boundary faces have associated BCs.
 
 - [ ] Create traits.rs for PhysicsModel
