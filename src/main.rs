@@ -17,7 +17,7 @@ use std::fs;
 fn main() {
     fs::create_dir_all("output/main").expect("Failed to create output directory");
 
-    let (mesh, params) = models::pn::pn::pn_problem_def(1.0, 500, true);
+    let (mesh, params) = models::pn::pn::pn_problem_def(1.0, 1000, true);
     let (v_scale, ni_norm, n_scale) = (params.v_scale, params.ni_norm, params.n_scale);
 
     let mut model = PnJunctionModel::new(params.clone(), 1e-4, true).with_mesh(&mesh);
@@ -103,7 +103,7 @@ fn solve_sparse(
     //     max_iterations: 10000,
     // };
     let mut solver = NewtonArmijoSolver::default();
-    solver.max_step = Some(10.0);
+    solver.max_step = Some(2.0);
 
     println!("Running Sparse Newton solver...");
     match solver.solve(&model.functional, mesh, guess, true) {

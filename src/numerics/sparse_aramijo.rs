@@ -9,6 +9,7 @@ use num_dual::DualDVec64;
 #[allow(unused)]
 use crate::numerics::timing::{finalize_and_print, reset_timing};
 use crate::numerics::timing::{record_jacobian, record_linear_solve};
+use crate::numerics::{Convergence, ConvergenceCriteria, ConvergenceMetric, Tolerance};
 use crate::{
     discretization::mesh::Mesh,
     numerics::solver::{SolverError, SolverResult, write_hist_to_file},
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub struct NewtonArmijoSolver {
-    pub tolerance: f64,
+    pub convergence: Convergence,
     pub max_iterations: u32,
     /// Minimum step size before we give up (prevents infinite loops)
     pub min_step_size: f64,
@@ -34,12 +35,16 @@ pub struct NewtonArmijoSolver {
 impl Default for NewtonArmijoSolver {
     fn default() -> Self {
         Self {
-            tolerance: 1e-6,
+            convergence: Convergence {
+                criteria: ConvergenceCriteria::Residual,
+                tolerance: Tolerance::Relative(1e-9),
+                metric: ConvergenceMetric::MaxNorm,
+            },
             max_iterations: 50,
-            min_step_size: 1e-3,
+            min_step_size: 1e-6,
             armijo_param: 1e-4,
             max_step: None,
-            forcing_term: 0.01,
+            forcing_term: 0.1,
         }
     }
 }
@@ -56,23 +61,26 @@ impl NewtonArmijoSolver {
         let solve_start = Instant::now();
 
         let mut u = initial_guess;
+        // History: (iter, residual_norm, rel_residual_norm, step_percent)
         let mut history: Vec<(u32, f64, f64, f64)> = Vec::new();
 
         let initial_res_vec = self.compute_residual_only(model, mesh, &u);
-        let mut current_res_norm = initial_res_vec.norm();
+        // let mut current_res_norm = initial_res_vec.norm();
+        let mut current_res_norm = self.convergence.norm(&initial_res_vec);
         let initial_residual_norm = current_res_norm;
+        let mut initial_update_norm: Option<f64> = None;
 
         if logging {
             println!("Newton-Armijo Solver started. {} unknowns.", u.len());
             println!("Initial Residual: {:.4e}", initial_residual_norm);
-            println!("  Iter |  Residual  |   Step   | Alpha |  Lin. It |");
+            println!("  Iter |  Res Norm  |   Step   | Alpha |  Lin. It |");
             println!("-------|------------|----------|-------|----------|");
         }
 
         for i in 0..self.max_iterations {
             // Compute Jacobian and Residual at current point
             // Note: We re-compute residual here to get the Jacobian.
-            let (residual, mut jacobian) =
+            let (mut residual, mut jacobian) =
                 record_jacobian(|| self.compute_residual_and_jacobian(model, mesh, &u));
 
             // Sanity check
@@ -81,19 +89,20 @@ impl NewtonArmijoSolver {
                 return Err(SolverError::LinearSolveFailed);
             }
 
-            current_res_norm = residual.norm();
+            // current_res_norm = residual.norm();
+            current_res_norm = self.convergence.norm(&residual);
 
             // Check convergence
-            if current_res_norm < self.tolerance {
-                return self.success(
-                    u,
-                    i,
-                    current_res_norm,
-                    history,
-                    initial_residual_norm,
-                    solve_start,
-                );
-            }
+            // if current_res_norm < self.tolerance {
+            //     return self.success(
+            //         u,
+            //         i,
+            //         current_res_norm,
+            //         history,
+            //         initial_residual_norm,
+            //         solve_start,
+            //     );
+            // }
 
             let n = residual.len();
 
@@ -126,7 +135,7 @@ impl NewtonArmijoSolver {
             // Linear Solve (BiCGStab)
             let op = kryst::matrix::op::CsrOp::new(Arc::new(jacobian));
             let linear_tol = (current_res_norm * self.forcing_term)
-                .max(self.tolerance)
+                .max(1e-16)
                 .min(1e-2);
 
             let mut bicgstab_solver =
@@ -157,7 +166,8 @@ impl NewtonArmijoSolver {
             // Backtracking Line Search
             let mut alpha = 1.0;
             let mut accepted = false;
-            let mut next_u = u.clone();
+            // let mut next_u = u.clone();
+            let mut next_u;
             let mut next_res_norm = current_res_norm;
 
             // Optionally limit the max norm of delta_u to prevent massive potential jumps
@@ -174,14 +184,20 @@ impl NewtonArmijoSolver {
                 next_u = &u + &delta_u * alpha;
 
                 // Compute ONLY the residual vector for the candidate (cheaper than Jacobian)
-                let next_res = self.compute_residual_only(model, mesh, &next_u);
-                next_res_norm = next_res.norm();
+                // let next_res = self.compute_residual_only(model, mesh, &next_u);
+                residual = self.compute_residual_only(model, mesh, &next_u);
+                // next_res_norm = next_res.norm();
+                next_res_norm = self.convergence.norm(&residual);
 
                 // The Condition: ||F_new|| <= (1 - alpha * t) * ||F_old||
                 // If armijo_param is 0.0, this simplifies to next < current
                 let target_norm = (1.0 - alpha * self.armijo_param) * current_res_norm;
+                println!("Alpha: {:.4e}, Next Res Norm: {:.4e}, Target Norm: {:.4e}", alpha, next_res_norm, target_norm);
 
                 if next_res_norm < target_norm {
+                    if initial_update_norm.is_none() {
+                        initial_update_norm = Some(self.convergence.norm(&delta_u));
+                    }
                     accepted = true;
                     u = next_u;
                     current_res_norm = next_res_norm;
@@ -213,12 +229,29 @@ impl NewtonArmijoSolver {
                     "  {:4} | {:.4e} | {:.4e} | {:.3} | {:8} |",
                     i,
                     next_res_norm,
-                    delta_u.norm(),
+                    // delta_u.norm(),
+                    self.convergence.norm(&delta_u),
                     alpha,
                     lin_iters
                 );
             }
+            if self.convergence.check_convergence(
+                &residual,
+                &delta_u,
+                initial_residual_norm,
+                initial_update_norm.expect("Oopsie daisy!"),
+            ) {
+                return self.success(
+                    u,
+                    i,
+                    current_res_norm,
+                    history,
+                    initial_residual_norm,
+                    solve_start,
+                );
+            }
         }
+
         Err(SolverError::NonConvergence)
     }
 
