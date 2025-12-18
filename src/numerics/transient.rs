@@ -1,5 +1,6 @@
 use crate::discretization::mesh::Mesh;
 use crate::numerics::sparse_aramijo::NewtonArmijoSolver;
+use crate::numerics::Tolerance;
 use crate::physics::functional::FunctionalPhysics;
 use nalgebra::DVector;
 use num_dual::DualDVec64;
@@ -9,6 +10,7 @@ pub struct TransientSolver {
     pub t_end: f64,
     pub dt: f64,
     pub tolerance: f64,
+    pub theta: f64,
 }
 
 impl Default for TransientSolver {
@@ -18,6 +20,7 @@ impl Default for TransientSolver {
             t_end: 1.0,
             dt: 1e-4,
             tolerance: 1e-5,
+            theta: 1.0,
         }
     }
 }
@@ -32,11 +35,15 @@ impl TransientSolver {
     ) where
         F: 'static + Clone,
     {
+        model.theta = self.theta;
+
+
         let mut u = initial_condition;
         let mut t = self.t_start;
         let mut dt = self.dt;
 
-        let solver = NewtonArmijoSolver::default();
+        let mut solver = NewtonArmijoSolver::default();
+        solver.convergence.tolerance = Tolerance::Combined(self.tolerance, 1e-9);
 
         // Initialize history in functional
         model.prepare_time_step(mesh, u.clone(), dt);
@@ -58,7 +65,7 @@ impl TransientSolver {
                     // Accept step
                     t += dt;
                     u = result.solution;
-                    dt *= 1.2; // Simple timestep increase on success
+                    // dt *= 1.2; // Simple timestep increase on success
 
                     println!(
                         "Step {:>4} | t = {:.4e} | dt = {:.3e} | iters = {}",

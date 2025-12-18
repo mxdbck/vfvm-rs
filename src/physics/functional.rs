@@ -51,7 +51,9 @@ pub struct FunctionalPhysics<T, D> {
     pub tolerances: NumericalTolerances,
 
     pub dt: Option<f64>,
+    pub theta: f64, // 1.0 = Backward Euler, 0.5 = Crank-Nicolson, 0.0 = Forward Euler (ah heeeell nah)
     pub s_old_cache: Option<DVector<T>>,
+    pub spatial_old_cache: Option<DVector<T>>,
 }
 
 impl<T, D> FunctionalPhysics<T, D>
@@ -79,7 +81,9 @@ where
             current_time: None,
             tolerances: NumericalTolerances::default(),
             dt: None,
+            theta: 1.0, // Default to Implicit Euler
             s_old_cache: None,
+            spatial_old_cache: None,
         }
     }
 
@@ -339,17 +343,33 @@ where
         let s_old_t = self.storage_contribution(mesh, &u_old_t);
 
         self.s_old_cache = Some(s_old_t);
+
+        if self.theta < 1.0 {
+            let spation_old_t = self.flux_contribution(mesh, &u_old_t)
+                + self.reaction_contribution(mesh, &u_old_t);
+            self.spatial_old_cache = Some(spation_old_t);
+        } else {
+            self.spatial_old_cache = None;
+        }
     }
 
     /// Calculate the full residual vector.
     pub fn calculate_residual(&self, mesh: &Mesh, u: DVector<T>) -> DVector<T> {
-        let mut residual = self.flux_contribution(mesh, &u);
-        residual += self.reaction_contribution(mesh, &u);
+        let mut spatial_current = self.flux_contribution(mesh, &u)
+            + self.reaction_contribution(mesh, &u);
+        let theta_t = T::from_f64(self.theta)
+            .expect("Oopsie, theta should be convertible to the AD numerical type");
+
+        let mut residual = spatial_current * theta_t.clone();
+
+        if let Some(spation_old) = &self.spatial_old_cache {
+            residual += spation_old * (T::one() - theta_t);
+        }
+
         if let (Some(dt), Some(s_old)) = (self.dt, &self.s_old_cache) {
-            let storage = self.storage_contribution(mesh, &u);
-            residual += (storage - s_old)
-                / T::from_f64(dt)
-                    .expect("Oopsie, dt should be convertible to the AD numerical type");
+            let dt_t = T::from_f64(dt)
+                .expect("Oopsie, dt should be convertible to the AD numerical type");
+            residual += (self.storage_contribution(mesh, &u) - s_old.clone()) / dt_t;
         }
         residual
     }

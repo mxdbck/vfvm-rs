@@ -15,15 +15,14 @@ where
         let cell_id = r / m;
         let var = r % m;
 
-        let mut acc = T::zero();
+        let mut acc_spatial = T::zero();
 
         // (A) reaction/source for this cell only
         {
             let u_cell: &[T] = &u[(cell_id * m)..(cell_id * m + m)];
             let mut f_reaction = vec![T::zero(); m];
             (self.reaction)(&mut f_reaction, u_cell, &mesh.cells[cell_id], &self.data);
-            // volume scaling like reaction_contribution
-            acc += f_reaction[var].clone() * mesh.cells[cell_id].volume;
+            acc_spatial += f_reaction[var].clone() * mesh.cells[cell_id].volume;
         }
 
         // (B) flux terms on faces touching this cell
@@ -32,23 +31,18 @@ where
             let face = &mesh.faces[*face_idx];
             match face.neighbor_cell_ids {
                 (k, Some(l)) => {
-                    // Left/right slices
                     let u_k: &[T] = &u[(k * m)..(k * m + m)];
                     let u_l: &[T] = &u[(l * m)..(l * m + m)];
-
-                    // compute flux
                     for x in &mut f_flux {
                         *x = T::zero();
                     }
                     (self.flux)(&mut f_flux, u_k, u_l, face, &self.data);
-
                     let d = self.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
                     let scale = Self::face_scale(face, d);
-
                     if cell_id == k {
-                        acc += f_flux[var].clone() * scale; // leaving k, positive
+                        acc_spatial += f_flux[var].clone() * scale; // leaving k, positive
                     } else if cell_id == l {
-                        acc -= f_flux[var].clone() * scale; // entering l, negative
+                        acc_spatial -= f_flux[var].clone() * scale; // entering l, negative
                     }
                 }
                 (k, None) => {
@@ -56,23 +50,45 @@ where
                         continue;
                     };
                     let u_k: &[T] = &u[(k * m)..(k * m + m)];
-
                     let ghost = self.compute_ghost_values(u_k, face, mesh.cells[k].centroid, label);
-
                     for x in &mut f_flux {
                         *x = T::zero();
                     }
                     (self.flux)(&mut f_flux, u_k, &ghost, face, &self.data);
-
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
                     let scale = Self::face_scale(face, d);
-
-                    acc += f_flux[var].clone() * scale;
+                    acc_spatial += f_flux[var].clone() * scale;
                 }
             }
         }
 
-        acc
+        // Transient Simulation Residual Assembly
+        // If not using a trasient simulation, the
+        // following reduces to just the spatial
+        // residual.
+
+        // Add theta * Acc_Spatial
+        let theta_t = T::from_f64(self.theta).unwrap();
+        let mut total_residual = acc_spatial * theta_t;
+
+        // Add (1-theta) * Old_Spatial
+        if let Some(spatial_old) = &self.spatial_old_cache {
+            let one_minus_theta = T::from_f64(1.0 - self.theta).unwrap();
+            total_residual += spatial_old[r].clone() * one_minus_theta;
+        }
+
+        // Add Storage Term
+        if let (Some(dt), Some(s_old)) = (self.dt, &self.s_old_cache) {
+            let u_cell: &[T] = &u[(cell_id * m)..(cell_id * m + m)];
+            let mut f_storage = vec![T::zero(); m];
+            (self.storage)(&mut f_storage, u_cell, &mesh.cells[cell_id], &self.data);
+            let s_new = f_storage[var].clone() * mesh.cells[cell_id].volume;
+            let s_old_val = s_old[r].clone();
+
+            total_residual += (s_new - s_old_val) / T::from_f64(dt).unwrap();
+        }
+
+        total_residual
     }
 }
 
@@ -128,7 +144,6 @@ where
     }
 
     /// Combine duplicate column indices by summing their values.
-    /// Returns deduplicated (cols, vals) sorted by column index.
     #[inline]
     fn combine_duplicates(cols: &mut Vec<usize>, vals: &mut Vec<f64>) {
         if cols.len() <= 1 {
@@ -138,28 +153,9 @@ where
         let mut p: Vec<usize> = (0..cols.len()).collect();
         p.sort_unstable_by_key(|&i| cols[i]);
 
-        // let mut result_cols = Vec::with_capacity(cols.len());
-        // let mut result_vals = Vec::with_capacity(vals.len());
-
-        // let mut i = 0;
-        // while i < idx.len() {
-        //     let col = cols[idx[i]];
-        //     let mut sum = vals[idx[i]];
-        //     i += 1;
-
-        //     while i < idx.len() && cols[idx[i]] == col {
-        //         sum += vals[idx[i]];
-        //         i += 1;
-        //     }
-
-        //     result_cols.push(col);
-        //     result_vals.push(sum);
-        // }
-
         let sorted_cols: Vec<usize> = p.iter().map(|&i| cols[i]).collect();
         let sorted_vals: Vec<f64> = p.iter().map(|&i| vals[i]).collect();
 
-        // 2. Compress (Deduplicate)
         cols.clear();
         vals.clear();
 
@@ -198,20 +194,13 @@ where
         let cell_id = r / m;
         let var = r % m;
 
-        // let mut cols: Vec<usize> = Vec::with_capacity(8 * m);
-        // let mut vals: Vec<f64> = Vec::with_capacity(8 * m);
-
-        // let mut diag_accumulator = vec![0.0; m];
-
         // (A) reaction/source contribution
         {
             let u_cell = self.seed_cell_dual(u, cell_id);
             let mut f = vec![DualDVec64::from_re(0.0); m];
             (self.reaction)(&mut f, &u_cell, &mesh.cells[cell_id], &self.data);
-
             let rd = f[var].clone() * mesh.cells[cell_id].volume;
             let deriv = rd.eps.unwrap_generic(Dyn(m), U1);
-            // push_block_view(&mut cols, &mut vals, cell_id, &deriv, m);
             for j in 0..m {
                 diag_accumulator[j] += deriv[(j, 0)];
             }
@@ -220,39 +209,42 @@ where
         // (B) flux contributions on faces touching this cell
         for &face_idx in &mesh.cells[cell_id].face_ids {
             let face = &mesh.faces[face_idx];
-
             match face.neighbor_cell_ids {
                 (k, Some(l)) => {
                     if k != cell_id && l != cell_id {
                         continue;
                     }
-
                     let (uk, ul) = self.seed_face_dual(u, k, l);
                     let mut f = vec![DualDVec64::from_re(0.0); m];
                     (self.flux)(&mut f, &uk, &ul, face, &self.data);
-
                     let d = self.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
                     let mut rd = f[var].clone() * Self::face_scale(face, d);
                     if cell_id == l {
                         rd = -rd;
                     }
-
                     let d_eps = rd.eps.unwrap_generic(Dyn(2 * m), U1);
 
                     if cell_id == k {
                         for j in 0..m {
                             diag_accumulator[j] += d_eps[(j, 0)];
                         }
-                        push_block_view(cols, vals, l, &d_eps.rows(m, m), m);
+                        // Off-diagonals must be scaled by theta NOW before pushing
+                        // (only relevant for transient simulations)
+                        let block = d_eps.rows(m, m);
+                        for j in 0..m {
+                            cols.push(l * m + j);
+                            vals.push(block[(j, 0)] * self.theta);
+                        }
                     } else if cell_id == l {
                         for j in 0..m {
                             diag_accumulator[j] += d_eps[(m + j, 0)];
                         }
-                        push_block_view(cols, vals, k, &d_eps.rows(0, m), m);
+                        let block = d_eps.rows(0, m);
+                        for j in 0..m {
+                            cols.push(k * m + j);
+                            vals.push(block[(j, 0)] * self.theta);
+                        }
                     }
-
-                    // push_block_view(&mut cols, &mut vals, k, &d_eps.rows(0, m), m);
-                    // push_block_view(&mut cols, &mut vals, l, &d_eps.rows(m, m), m);
                 }
                 (k, None) => {
                     if k != cell_id {
@@ -262,22 +254,35 @@ where
                     let Some(label) = self.face_tags.get(&face_idx) else {
                         continue;
                     };
-
                     let uk = self.seed_cell_dual(u, k);
                     let ubc = self.compute_ghost_values(&uk, face, mesh.cells[k].centroid, label);
-
                     let mut f = vec![DualDVec64::from_re(0.0); m];
                     (self.flux)(&mut f, &uk, &ubc, face, &self.data);
-
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
                     let rd = f[var].clone() * Self::face_scale(face, d);
                     let deriv = rd.eps.unwrap_generic(Dyn(m), U1);
-
-                    // push_block_view(&mut cols, &mut vals, k, &deriv, m);
                     for j in 0..m {
                         diag_accumulator[j] += deriv[(j, 0)];
                     }
                 }
+            }
+        }
+
+        // Apply Theta Scaling to accumulated Spatial Diagonal
+        // (only relevant for transient simulations)
+        for j in 0..m {
+            diag_accumulator[j] *= self.theta;
+        }
+
+        // (C) Storage / Time Term (Unscaled by theta)
+        if let Some(dt) = self.dt {
+            let u_cell = self.seed_cell_dual(u, cell_id);
+            let mut f = vec![DualDVec64::from_re(0.0); m];
+            (self.storage)(&mut f, &u_cell, &mesh.cells[cell_id], &self.data);
+            let deriv = f[var].clone().eps.unwrap_generic(Dyn(m), U1);
+            let factor = mesh.cells[cell_id].volume / dt;
+            for j in 0..m {
+                diag_accumulator[j] += deriv[(j, 0)] * factor;
             }
         }
 
@@ -287,7 +292,6 @@ where
                 vals.push(diag_accumulator[j]);
             }
         }
-
         Self::combine_duplicates(cols, vals)
     }
 }

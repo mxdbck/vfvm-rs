@@ -192,7 +192,6 @@ impl NewtonArmijoSolver {
                 // The Condition: ||F_new|| <= (1 - alpha * t) * ||F_old||
                 // If armijo_param is 0.0, this simplifies to next < current
                 let target_norm = (1.0 - alpha * self.armijo_param) * current_res_norm;
-                println!("Alpha: {:.4e}, Next Res Norm: {:.4e}, Target Norm: {:.4e}", alpha, next_res_norm, target_norm);
 
                 if next_res_norm < target_norm {
                     if initial_update_norm.is_none() {
