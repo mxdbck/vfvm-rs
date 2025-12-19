@@ -19,7 +19,7 @@
 - [x] Go through code and simplify where possible.
 - [x] Implement less smooth-brained newton-raphson or alternative.
 - [x] Make a simple electrostatics example.
-- [ ] Implement transient simulations.
+- [x] Implement transient simulations.
 
 - [ ] Make documents that explains the code and more complex bits. 
 - [ ] Look into Schaffeter-Gummel from WIAS paper
@@ -37,7 +37,7 @@
 
 
 ### Examples to Implement
-- [ ] Heat conduction
-- [ ] Transient Diffusion
-- [ ] Convection-Diffusion
-- [ ] Reaction-Diffusion
+- [ ] Heat conduction (Idea : copper on silicon with bottom heating and convective cooling on top)
+- [ ] Transient Diffusion (Idea : anisotropic diffusion)
+- [ ] Convection-Diffusion (Idea : rotating plume)
+- [x] Reaction-Diffusion (Free quantum particle)
