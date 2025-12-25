@@ -271,7 +271,8 @@ where
                     );
 
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    let scale = Self::face_scale(face, d);
+                    // FIX: Ghost node is mirrored across face, so effective distance is 2*d
+                    let scale = Self::face_scale(face, 2.0 * d);
 
                     for i in 0..self.num_vars_per_cell {
                         residual[k * self.num_vars_per_cell + i] += f_flux[i].clone() * scale;

@@ -56,7 +56,9 @@ where
                     }
                     (self.flux)(&mut f_flux, u_k, &ghost, face, &self.data);
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    let scale = Self::face_scale(face, d);
+                    // FIX: Ghost node is mirrored across face, so effective distance is 2*d
+                    let scale = Self::face_scale(face, 2.0 * d);
+
                     acc_spatial += f_flux[var].clone() * scale;
                 }
             }
@@ -259,7 +261,10 @@ where
                     let mut f = vec![DualDVec64::from_re(0.0); m];
                     (self.flux)(&mut f, &uk, &ubc, face, &self.data);
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    let rd = f[var].clone() * Self::face_scale(face, d);
+
+                    // FIX: Ghost node is mirrored across face, so effective distance is 2*d
+                    let rd = f[var].clone() * Self::face_scale(face, 2.0 * d);
+
                     let deriv = rd.eps.unwrap_generic(Dyn(m), U1);
                     for j in 0..m {
                         diag_accumulator[j] += deriv[(j, 0)];
