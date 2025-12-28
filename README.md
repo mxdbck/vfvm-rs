@@ -6,7 +6,7 @@ The project is greatly inspired by the [VoronoiFVM.jl](https://github.com/WIAS-P
 
 ### Implementation Details
 
-This library implements a **Cell-Centered Finite Volume Method**. The computational domain is partitioned into polyhedral control volumes (specifically, Voronoi cells), and the unknown solution variables are stored at the centroid of each cell.
+This library implements a **Cell-Centered Finite Volume Method** on Voronoi meshes. See https://wias-pdelib.github.io/VoronoiFVM.jl/stable/method/ for more details and a discussion of advantages and disadvantages of this approach.
 
 The spatial discretization is based on a **Two-Point Flux Approximation**. The total flux $\Gamma_{kl}$ across a face $f$ separating two cells, $k$ and $l$, is computed by the library as:
 
@@ -20,6 +20,20 @@ Where:
 Boundary conditions are implemented using a **ghost cell** methodology. The library computes a "ghost" state outside the domain that enforces generalized (Robin) boundary conditions, which are then used as the "right-state" $u_l$ in the flux function for boundary faces.
 
 The resulting system of (nonlinear) algebraic equations is solved using an inexact Newton method with Armijo line search. The Jacobian matrix required by the solver is calculated using **automatic differentiation** (`num_dual`), which provides the exact derivatives of the user's `FluxFn` and `ReactionFn` functions.
+
+### Libraries Used
+- [meshless_voronoi](https://github.com/yuyttenhove/meshless_voro) : which provides easy to use voronoi mesh generation
+- [nalgebra](https://nalgebra.org/) : for linear algebra operations
+- [num-dual](https://crates.io/crates/num-dual) : for automatic differentiation
+- [kryst](https://github.com/tmathis720/kryst) : which provides ridiculously fast sparse matrix system solvers (at least the ones I tried i.e. BiCGStab).
+
+### Main Things That Remain to be Done
+- Implement more flexible solver API with different preconditioners etc...
+- Implement better mesh generation, more functions to create different geometries. For a start, being able to create non-re ctangular domains would be nice.
+- Make and test a 3D example
+- Try to parallelize some stuff
+- Improve documentation
+
 
 ### Debug vs Release Builds
 Some correctness checks are only performed in debug builds:
