@@ -1,4 +1,5 @@
 use nalgebra::DVector;
+use vfvm_rs::numerics::sparse_aramijo::NewtonArmijoSolver;
 use std::fs;
 use vfvm_rs::models::pn::pn::PnJunctionModel;
 use vfvm_rs::numerics::sparse::SparseNewtonSolver;
@@ -28,10 +29,12 @@ fn main() {
 
     let mut model = PnJunctionModel::new(params.clone(), 0.0, true).with_mesh(&mesh);
 
-    let solver = SparseNewtonSolver {
-        tolerance: 1e-8,
-        max_iterations: 10000,
-    };
+    // let solver = SparseNewtonSolver {
+    //     tolerance: 1e-8,
+    //     max_iterations: 10000,
+    // };
+
+    let solver = NewtonArmijoSolver::default();
 
     // Start with initial guess at equilibrium
     let mut current_solution = model.initial_condition(&mesh);
