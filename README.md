@@ -57,3 +57,14 @@ To run an example :
 - `cargo run --example capactor`
 To run the benchmarks (not recommended yet) :
 - `cargo bench`
+
+### Examples 
+- [capacitor.rs](examples/capacitor.rs) : 2D capacitor potential simulation
+- [particle.rs](examples/particle.rs) : transient simulation of a quantum particle moving through a 2D potential gap
+- [pn_junction.rs](src/main.rs) : 1D PN junction semiconductor device under equilibrium conditions
+
+
+![](assets/capacitor.svg)
+![](assets/quantum_barrier.gif)
+![](assets/pn.svg)
+
