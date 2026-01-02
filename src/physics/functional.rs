@@ -197,8 +197,17 @@ where
         cell_centroid: [f64; 3],
         label: &str,
     ) -> Vec<T> {
-        let (p, n) = Self::face_geometry(face);
-        let delta = Self::bc_delta(face.centroid, cell_centroid, n);
+        let (p, mut n) = Self::face_geometry(face);
+        let mut delta = Self::bc_delta(face.centroid, cell_centroid, n);
+
+        // Case  : normal doesn't point outward from the domain
+        if delta < 0.0 {
+            n.nx = -n.nx;
+            n.ny = -n.ny;
+            n.nz = -n.nz;
+            delta = -delta;
+        }
+
         let t = self.current_time.unwrap_or(0.0);
 
         (0..self.num_vars_per_cell)
