@@ -4,6 +4,9 @@ VFVM-RS is a Rust library for solving partial differential equations (PDEs) usin
 
 The project is greatly inspired by the [VoronoiFVM.jl](https://github.com/WIAS-PDELib/VoronoiFVM.jl) Julia library developed at WIAS. Especially, their functional API design which is pretty awesome.
 
+> [!WARNING]
+> While it is "inspired" by VoronoiFVM.jl, this library is a toy project compared to the Julia project which is maintained by a team of experts. It has way less features, less documentation, less tests, and probably more bugs. Use at your own risk.
+
 ### Implementation Details
 
 This library implements a **Cell-Centered Finite Volume Method** on Voronoi meshes. See https://wias-pdelib.github.io/VoronoiFVM.jl/stable/method/ for more details and a discussion of advantages and disadvantages of this approach.
