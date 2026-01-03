@@ -9,7 +9,7 @@ The project is greatly inspired by the [VoronoiFVM.jl](https://github.com/WIAS-P
 
 ### Implementation Details
 
-This library implements a **Cell-Centered Finite Volume Method** on Voronoi meshes. See https://wias-pdelib.github.io/VoronoiFVM.jl/stable/method/ for more details and a discussion of advantages and disadvantages of this approach.
+This library implements a **Cell-Centered Finite Volume Method** on Voronoi meshes.
 
 The spatial discretization is based on a **Two-Point Flux Approximation**. The total flux $\Gamma_{kl}$ across a face $f$ separating two cells, $k$ and $l$, is computed by the library as:
 
