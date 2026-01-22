@@ -16,7 +16,7 @@ The library follows VoronoiFVM.jl's conventions. Which I'll summarize here as:
 
 $$ \frac{ \partial (\text{storage}) }{ \partial t }+\nabla \cdot (\text{flux})=\text{storage}-\text{reaction}   $$
 
-(though we include the storage term into the reaction term).
+(though we include the source term into the reaction term).
 Putting our equation in the required forms we get :
 
 $$  \dot{u}+\nabla  \cdot \left( \frac{\hbar}{2m}\nabla v \right)=-(-Vv)  $$
