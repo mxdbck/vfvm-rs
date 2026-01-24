@@ -1,5 +1,5 @@
 use crate::discretization::mesh::{Cell, Face, Mesh};
-use crate::physics::bc::{BCRegistry, Field, Normal, Point, robin_ghost_val};
+use crate::physics::bc::{robin_ghost_val, BCRegistry, DirichletStyle, Field, Normal, Point};
 use nalgebra::DVector;
 use num_dual::DualNum;
 use std::collections::HashMap;
@@ -214,12 +214,15 @@ where
             .map(|j| {
                 let field = &self.field_names[j];
                 if let Some(rule) = self.bc_registry.find_for(field.0.as_ref(), label, p, n) {
+                    if rule.style == DirichletStyle::Strong {
+                        return T::from((rule.bc.gamma)(t, p, n) / (rule.bc.alpha)(t, p, n));
+                    }
                     let alpha = (rule.bc.alpha)(t, p, n);
                     let beta = (rule.bc.beta)(t, p, n);
                     let gamma = (rule.bc.gamma)(t, p, n);
-                    robin_ghost_val(u_interior[j].clone(), alpha, beta, gamma, delta)
+                    return robin_ghost_val(u_interior[j].clone(), alpha, beta, gamma, delta);
                 } else {
-                    u_interior[j].clone()
+                    return u_interior[j].clone();
                 }
             })
             .collect()

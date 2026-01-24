@@ -109,7 +109,7 @@ pub enum BoundarySelector {
     Predicate(Arc<dyn Fn(Point, Normal) -> bool + Send + Sync>),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirichletStyle {
     Strong,
     #[allow(unused)]

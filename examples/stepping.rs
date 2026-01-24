@@ -2,7 +2,6 @@ use nalgebra::DVector;
 use vfvm_rs::numerics::sparse_aramijo::NewtonArmijoSolver;
 use std::fs;
 use vfvm_rs::models::pn::pn::PnJunctionModel;
-use vfvm_rs::numerics::sparse::SparseNewtonSolver;
 use vfvm_rs::physics::PhysicsModel;
 use vfvm_rs::processing::csv_writer;
 
@@ -14,8 +13,8 @@ fn main() {
     let logging = true;
 
     let v_start = 0.0;
-    let v_end = 1.0;
-    let v_step = 0.1;
+    let v_end = -1.0;
+    let v_step = -0.05;
 
     println!("Voltage Stepping Simulation");
     println!("============================");
