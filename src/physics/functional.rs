@@ -196,7 +196,8 @@ where
         face: &Face,
         cell_centroid: [f64; 3],
         label: &str,
-    ) -> Vec<T> {
+        var_of_interest: usize,
+    ) -> (Vec<T>, bool) {
         let (p, mut n) = Self::face_geometry(face);
         let mut delta = Self::bc_delta(face.centroid, cell_centroid, n);
 
@@ -210,11 +211,15 @@ where
 
         let t = self.current_time.unwrap_or(0.0);
 
-        (0..self.num_vars_per_cell)
+        let mut is_strong_dirichlet = false;
+        ((0..self.num_vars_per_cell)
             .map(|j| {
                 let field = &self.field_names[j];
                 if let Some(rule) = self.bc_registry.find_for(field.0.as_ref(), label, p, n) {
                     if rule.style == DirichletStyle::Strong {
+                        if j == var_of_interest {
+                            is_strong_dirichlet = true;
+                        }
                         return T::from((rule.bc.gamma)(t, p, n) / (rule.bc.alpha)(t, p, n));
                     }
                     let alpha = (rule.bc.alpha)(t, p, n);
@@ -225,7 +230,7 @@ where
                     return u_interior[j].clone();
                 }
             })
-            .collect()
+            .collect(), is_strong_dirichlet)
     }
 
     /// Compute the residual contribution from all fluxes across faces.
@@ -266,11 +271,12 @@ where
                     };
                     let u_k = u.rows(k * self.num_vars_per_cell, self.num_vars_per_cell);
 
-                    let ghost = self.compute_ghost_values(
+                    let (ghost, _) = self.compute_ghost_values(
                         u_k.as_slice(),
                         face,
                         mesh.cells[k].centroid,
                         label,
+                        0, // var_of_interest (not used here)
                     );
 
                     f_flux.fill(T::zero());

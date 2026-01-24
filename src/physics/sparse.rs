@@ -50,14 +50,15 @@ where
                         continue;
                     };
                     let u_k: &[T] = &u[(k * m)..(k * m + m)];
-                    let ghost = self.compute_ghost_values(u_k, face, mesh.cells[k].centroid, label);
+                    let (ghost, is_strong_dirichlet) = self.compute_ghost_values(u_k, face, mesh.cells[k].centroid, label, var);
                     for x in &mut f_flux {
                         *x = T::zero();
                     }
                     (self.flux)(&mut f_flux, u_k, &ghost, face, &self.data);
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
+
                     // FIX: Ghost node is mirrored across face, so effective distance is 2*d
-                    let scale = Self::face_scale(face, 2.0 * d);
+                    let scale = Self::face_scale(face, if is_strong_dirichlet { 1.0 } else { 2.0 } * d);
 
                     acc_spatial += f_flux[var].clone() * scale;
                 }
@@ -257,13 +258,13 @@ where
                         continue;
                     };
                     let uk = self.seed_cell_dual(u, k);
-                    let ubc = self.compute_ghost_values(&uk, face, mesh.cells[k].centroid, label);
+                    let (ubc, is_strong_dirichlet) = self.compute_ghost_values(&uk, face, mesh.cells[k].centroid, label, var);
                     let mut f = vec![DualDVec64::from_re(0.0); m];
                     (self.flux)(&mut f, &uk, &ubc, face, &self.data);
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
 
                     // FIX: Ghost node is mirrored across face, so effective distance is 2*d
-                    let rd = f[var].clone() * Self::face_scale(face, 2.0 * d);
+                    let rd = f[var].clone() * Self::face_scale(face, if is_strong_dirichlet { 1.0 } else { 2.0 } * d);
 
                     let deriv = rd.eps.unwrap_generic(Dyn(m), U1);
                     for j in 0..m {
