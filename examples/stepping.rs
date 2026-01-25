@@ -13,8 +13,8 @@ fn main() {
     let logging = true;
 
     let v_start = 0.0;
-    let v_end = 1.0;
-    let v_step = 0.05;
+    let v_end = -1.0;
+    let v_step = -0.05;
 
     println!("Voltage Stepping Simulation");
     println!("============================");

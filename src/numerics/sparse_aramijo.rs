@@ -52,7 +52,7 @@ impl Default for NewtonArmijoSolver {
 impl NewtonArmijoSolver {
     pub fn solve<D: 'static>(
         &self,
-        model: &FunctionalPhysics<DualDVec64, D>,
+        model: &FunctionalPhysics<D>,
         mesh: &Mesh,
         initial_guess: DVector<f64>,
         logging: bool,
@@ -278,7 +278,7 @@ impl NewtonArmijoSolver {
     /// This avoids calculating the Jacobian matrix elements during the line search loop.
     pub fn compute_residual_only<D: 'static>(
         &self,
-        model: &FunctionalPhysics<DualDVec64, D>,
+        model: &FunctionalPhysics<D>,
         mesh: &Mesh,
         u: &DVector<f64>,
     ) -> DVector<f64> {
@@ -296,7 +296,7 @@ impl NewtonArmijoSolver {
 
     pub fn compute_residual_and_jacobian<D: 'static>(
         &self,
-        model: &FunctionalPhysics<DualDVec64, D>,
+        model: &FunctionalPhysics<D>,
         mesh: &Mesh,
         u: &DVector<f64>,
     ) -> (DVector<f64>, kryst::matrix::sparse::CsrMatrix<f64>) {

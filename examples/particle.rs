@@ -28,7 +28,7 @@ pub struct SchrodingerParams {
 
 pub fn setup_schrodinger_physics(
     params: SchrodingerParams,
-) -> FunctionalPhysics<DualDVec64, SchrodingerParams> {
+) -> FunctionalPhysics<SchrodingerParams> {
     let reaction = Box::new(
         |f: &mut [DualDVec64], u: &[DualDVec64], cell: &Cell, data: &SchrodingerParams| {
             let (psi_r, psi_i) = (&u[0], &u[1]);

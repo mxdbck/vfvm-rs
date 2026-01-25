@@ -25,7 +25,7 @@ struct CapacitorParams {
 }
 
 struct CapacitorModel {
-    physics: FunctionalPhysics<DualDVec64, CapacitorParams>,
+    physics: FunctionalPhysics<CapacitorParams>,
 }
 
 impl CapacitorModel {
@@ -36,7 +36,7 @@ impl CapacitorModel {
     }
 }
 
-impl PhysicsModel<DualDVec64> for CapacitorModel {
+impl PhysicsModel for CapacitorModel {
     fn num_variables(&self) -> usize {
         self.physics.num_vars_per_cell
     }
@@ -55,7 +55,7 @@ impl PhysicsModel<DualDVec64> for CapacitorModel {
     }
 }
 
-fn setup_electrostatics(params: CapacitorParams) -> FunctionalPhysics<DualDVec64, CapacitorParams> {
+fn setup_electrostatics(params: CapacitorParams) -> FunctionalPhysics<CapacitorParams> {
     // −ε∇ϕ
     let flux = Box::new(
         |f: &mut [DualDVec64],

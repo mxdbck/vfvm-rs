@@ -130,7 +130,7 @@ pub fn pn_problem_def(
 
 /// A complete PN junction model that implements PhysicsModel.
 pub struct PnJunctionModel {
-    pub functional: FunctionalPhysics<DualDVec64, PnJunctionParams>,
+    pub functional: FunctionalPhysics<PnJunctionParams>,
     pub v_applied: f64, // Applied voltage in physical units (V)
     pub logging: bool,
     pub(crate) bcs_configured: bool,
@@ -164,7 +164,7 @@ fn calculate_equilibrium_psi(c: f64, ni: f64) -> f64 {
     x.ln()
 }
 
-impl PhysicsModel<DualDVec64> for PnJunctionModel {
+impl PhysicsModel for PnJunctionModel {
     fn num_variables(&self) -> usize {
         self.functional.num_vars_per_cell
     }

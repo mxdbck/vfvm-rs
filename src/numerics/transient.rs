@@ -3,7 +3,6 @@ use crate::numerics::sparse_aramijo::NewtonArmijoSolver;
 use crate::numerics::Tolerance;
 use crate::physics::functional::FunctionalPhysics;
 use nalgebra::DVector;
-use num_dual::DualDVec64;
 
 pub struct TransientSolver {
     pub t_start: f64,
@@ -28,7 +27,7 @@ impl Default for TransientSolver {
 impl TransientSolver {
     pub fn solve<F>(
         &self,
-        model: &mut FunctionalPhysics<DualDVec64, F>,
+        model: &mut FunctionalPhysics<F>,
         mesh: &Mesh,
         initial_condition: DVector<f64>,
         mut callback: impl FnMut(f64, &DVector<f64>),

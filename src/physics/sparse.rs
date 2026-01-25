@@ -1,40 +1,39 @@
 use crate::discretization::mesh::Mesh;
 use crate::physics::functional::FunctionalPhysics;
 use nalgebra::{Dyn, Matrix, Storage, U1};
-use num_dual::{Derivative, DualDVec64, DualNum};
+use num_dual::{Derivative, DualDVec64};
 
-impl<T, D> FunctionalPhysics<T, D>
+impl<D> FunctionalPhysics<D>
 where
-    T: nalgebra::Scalar + DualNum<f64> + num_traits::Zero,
     D: 'static,
 {
     /// Compute only the r-th residual component (row kernel).
     /// r corresponds to (cell_id, var) with var in [0..num_vars).
-    pub fn residual_component_row(&self, mesh: &Mesh, u: &[T], r: usize) -> T {
+    pub fn residual_component_row(&self, mesh: &Mesh, u: &[DualDVec64], r: usize) -> DualDVec64 {
         let m = self.num_vars_per_cell;
         let cell_id = r / m;
         let var = r % m;
 
-        let mut acc_spatial = T::zero();
+        let mut acc_spatial = DualDVec64::from_re(0.0);
 
         // (A) reaction/source for this cell only
         {
-            let u_cell: &[T] = &u[(cell_id * m)..(cell_id * m + m)];
-            let mut f_reaction = vec![T::zero(); m];
+            let u_cell: &[DualDVec64] = &u[(cell_id * m)..(cell_id * m + m)];
+            let mut f_reaction = vec![DualDVec64::from_re(0.0); m];
             (self.reaction)(&mut f_reaction, u_cell, &mesh.cells[cell_id], &self.data);
             acc_spatial += f_reaction[var].clone() * mesh.cells[cell_id].volume;
         }
 
         // (B) flux terms on faces touching this cell
-        let mut f_flux = vec![T::zero(); m];
+        let mut f_flux = vec![DualDVec64::from_re(0.0); m];
         for face_idx in &mesh.cells[cell_id].face_ids {
             let face = &mesh.faces[*face_idx];
             match face.neighbor_cell_ids {
                 (k, Some(l)) => {
-                    let u_k: &[T] = &u[(k * m)..(k * m + m)];
-                    let u_l: &[T] = &u[(l * m)..(l * m + m)];
+                    let u_k: &[DualDVec64] = &u[(k * m)..(k * m + m)];
+                    let u_l: &[DualDVec64] = &u[(l * m)..(l * m + m)];
                     for x in &mut f_flux {
-                        *x = T::zero();
+                        *x = DualDVec64::from_re(0.0);
                     }
                     (self.flux)(&mut f_flux, u_k, u_l, face, &self.data);
                     let d = self.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
@@ -49,16 +48,19 @@ where
                     let Some(label) = self.face_tags.get(face_idx) else {
                         continue;
                     };
-                    let u_k: &[T] = &u[(k * m)..(k * m + m)];
-                    let (ghost, is_strong_dirichlet) = self.compute_ghost_values(u_k, face, mesh.cells[k].centroid, label, var);
+                    let u_k: &[DualDVec64] = &u[(k * m)..(k * m + m)];
+                    
+                    // Get Dirichlet boundary values at the face
+                    let u_boundary = self.compute_boundary_values(u_k, face, mesh.cells[k].centroid, label);
+                    
                     for x in &mut f_flux {
-                        *x = T::zero();
+                        *x = DualDVec64::from_re(0.0);
                     }
-                    (self.flux)(&mut f_flux, u_k, &ghost, face, &self.data);
+                    (self.flux)(&mut f_flux, u_k, &u_boundary, face, &self.data);
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
 
-                    // FIX: Ghost node is mirrored across face, so effective distance is 2*d
-                    let scale = Self::face_scale(face, if is_strong_dirichlet { 1.0 } else { 2.0 } * d);
+                    // Distance from cell centroid to boundary face
+                    let scale = Self::face_scale(face, d);
 
                     acc_spatial += f_flux[var].clone() * scale;
                 }
@@ -71,24 +73,24 @@ where
         // residual.
 
         // Add theta * Acc_Spatial
-        let theta_t = T::from_f64(self.theta).unwrap();
+        let theta_t = DualDVec64::from(self.theta);
         let mut total_residual = acc_spatial * theta_t;
 
         // Add (1-theta) * Old_Spatial
         if let Some(spatial_old) = &self.spatial_old_cache {
-            let one_minus_theta = T::from_f64(1.0 - self.theta).unwrap();
+            let one_minus_theta = DualDVec64::from(1.0 - self.theta);
             total_residual += spatial_old[r].clone() * one_minus_theta;
         }
 
         // Add Storage Term
         if let (Some(dt), Some(s_old)) = (self.dt, &self.s_old_cache) {
-            let u_cell: &[T] = &u[(cell_id * m)..(cell_id * m + m)];
-            let mut f_storage = vec![T::zero(); m];
+            let u_cell: &[DualDVec64] = &u[(cell_id * m)..(cell_id * m + m)];
+            let mut f_storage = vec![DualDVec64::from_re(0.0); m];
             (self.storage)(&mut f_storage, u_cell, &mesh.cells[cell_id], &self.data);
             let s_new = f_storage[var].clone() * mesh.cells[cell_id].volume;
             let s_old_val = s_old[r].clone();
 
-            total_residual += (s_new - s_old_val) / T::from_f64(dt).unwrap();
+            total_residual += (s_new - s_old_val) / DualDVec64::from(dt);
         }
 
         total_residual
@@ -109,7 +111,7 @@ fn push_block_view<S: Storage<f64, Dyn, U1>>(
     }
 }
 
-impl<D> FunctionalPhysics<DualDVec64, D>
+impl<D> FunctionalPhysics<D>
 where
     D: 'static,
 {
@@ -258,13 +260,16 @@ where
                         continue;
                     };
                     let uk = self.seed_cell_dual(u, k);
-                    let (ubc, is_strong_dirichlet) = self.compute_ghost_values(&uk, face, mesh.cells[k].centroid, label, var);
+                    
+                    // Get Dirichlet boundary values at the face
+                    let ubc = self.compute_boundary_values(&uk, face, mesh.cells[k].centroid, label);
+                    
                     let mut f = vec![DualDVec64::from_re(0.0); m];
                     (self.flux)(&mut f, &uk, &ubc, face, &self.data);
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
 
-                    // FIX: Ghost node is mirrored across face, so effective distance is 2*d
-                    let rd = f[var].clone() * Self::face_scale(face, if is_strong_dirichlet { 1.0 } else { 2.0 } * d);
+                    // Distance from cell centroid to boundary face
+                    let rd = f[var].clone() * Self::face_scale(face, d);
 
                     let deriv = rd.eps.unwrap_generic(Dyn(m), U1);
                     for j in 0..m {

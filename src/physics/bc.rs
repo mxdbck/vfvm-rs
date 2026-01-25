@@ -59,6 +59,8 @@ impl GeneralizedBC {
             gamma: g.into_sfn(),
         }
     }
+    /// WARNING: Neumann boundary conditions are not yet implemented in the flux calculation.
+    /// They will be treated as homogeneous Neumann (zero flux).
     pub fn neumann(q: impl IntoSFn) -> Self {
         Self {
             alpha: c(0.0),
@@ -66,6 +68,8 @@ impl GeneralizedBC {
             gamma: q.into_sfn(),
         }
     }
+    /// WARNING: Robin boundary conditions are not yet implemented in the flux calculation.
+    /// They will be treated as homogeneous Neumann (zero flux).
     pub fn robin(k: impl IntoSFn, g: impl IntoSFn) -> Self {
         let kf = k.into_sfn();
         let gf = g.into_sfn();
@@ -189,7 +193,12 @@ mod tests {
     }
 }
 
+/// Compute ghost cell value for Robin boundary conditions using the ghost cell method.
+/// 
+/// NOTE: This function is currently unused but preserved for potential future implementation
+/// of Robin/Neumann boundary conditions using the ghost cell approach.
 #[inline]
+#[allow(dead_code)]
 pub fn robin_ghost_val<T: DualNum<f64>>(
     u_i: T,
     alpha: f64,

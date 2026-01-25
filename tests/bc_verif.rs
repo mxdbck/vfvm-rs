@@ -13,7 +13,7 @@ use vfvm_rs::physics::PhysicsModel;
 #[derive(Clone)]
 struct LinearParams;
 
-fn setup_linear(params: LinearParams) -> FunctionalPhysics<DualDVec64, LinearParams> {
+fn setup_linear(params: LinearParams) -> FunctionalPhysics<LinearParams> {
     let flux = Box::new(
         |f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _face: &Face, _: &LinearParams| {
             f[0] = u_k[0].clone() - u_l[0].clone();
@@ -25,9 +25,9 @@ fn setup_linear(params: LinearParams) -> FunctionalPhysics<DualDVec64, LinearPar
 }
 
 struct TestModel<D: Clone + 'static> {
-    physics: FunctionalPhysics<DualDVec64, D>,
+    physics: FunctionalPhysics<D>,
 }
-impl<D: Clone + 'static> PhysicsModel<DualDVec64> for TestModel<D> {
+impl<D: Clone + 'static> PhysicsModel for TestModel<D> {
     fn num_variables(&self) -> usize { self.physics.num_vars_per_cell }
     fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
         self.physics.calculate_residual(mesh, u)

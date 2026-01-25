@@ -4,9 +4,10 @@ pub mod sparse;
 
 use crate::discretization::mesh::Mesh;
 use nalgebra::DVector;
+use num_dual::DualDVec64;
 
 /// Defines the contract for any physical model to be solved.
-pub trait PhysicsModel<T: nalgebra::Scalar> {
+pub trait PhysicsModel {
     /// Returns the number of unknown variables per mesh cell.
     /// For semiconductors, this would be 3 (potential, electron concentration, hole concentration).
     fn num_variables(&self) -> usize;
@@ -14,7 +15,7 @@ pub trait PhysicsModel<T: nalgebra::Scalar> {
     /// Calculates the residual vector `R(u)` for the system of equations.
     /// For a transient problem `M * du/dt = R(u)`, this function defines `R(u)`.
     /// This is the function that will be automatically differentiated.
-    fn calculate_residual(&self, mesh: &Mesh, u: DVector<T>) -> DVector<T>;
+    fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64>;
 
     /// Compute a physics-aware initial condition.
     /// Default: zeros (but models should override with something smarter)

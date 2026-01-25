@@ -41,7 +41,7 @@ impl NewtonSolver {
         logging: bool,
     ) -> Result<SolverResult, SolverError>
     where
-        M: PhysicsModel<DualDVec64>,
+        M: PhysicsModel,
     {
         #[cfg(feature = "timing")]
         {
@@ -114,7 +114,7 @@ impl NewtonSolver {
     }
 
     // A helper that wraps the call to the AD library.
-    pub fn compute_residual_and_jacobian<M: PhysicsModel<DualDVec64>>(
+    pub fn compute_residual_and_jacobian<M: PhysicsModel>(
         &self,
         model: &M,
         mesh: &Mesh,

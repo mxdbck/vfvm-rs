@@ -1,20 +1,20 @@
 use crate::discretization::mesh::{Cell, Face, Mesh};
-use crate::physics::bc::{robin_ghost_val, BCRegistry, DirichletStyle, Field, Normal, Point};
+use crate::physics::bc::{BCRegistry, Field, Normal, Point};
 use nalgebra::DVector;
-use num_dual::DualNum;
+use num_dual::DualDVec64;
 use std::collections::HashMap;
 
 // Type aliases for our function signatures to keep things clean.
-// Note the generic `T` for automatic differentiation.
+// Using concrete DualDVec64 type for automatic differentiation.
 
 // Flux function: f(flux_vector, u_left, u_right, face_geometry, user_data)
-type FluxFn<T, D> = Box<dyn Fn(&mut [T], &[T], &[T], &Face, &D)>;
+type FluxFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &[DualDVec64], &Face, &D)>;
 
 // Reaction/Source function: f(source_vector, u, cell_geometry, user_data)
-type ReactionFn<T, D> = Box<dyn Fn(&mut [T], &[T], &Cell, &D)>;
+type ReactionFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D)>;
 
 // Storage function (for time-dependent term): f(storage_vector, u, cell_geometry, user_data)
-type StorageFn<T, D> = Box<dyn Fn(&mut [T], &[T], &Cell, &D)>;
+type StorageFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D)>;
 
 #[allow(unused)]
 #[derive(Clone, Copy, Debug)]
@@ -34,16 +34,16 @@ impl Default for NumericalTolerances {
     }
 }
 
-/// A generic PhysicsModel configured by user-defined functions (closures).
-/// `T` is the numeric type (e.g., `f64` or `DualDVec64`) and `D` is a generic
-/// type for any user-defined data/parameters struct.
-pub struct FunctionalPhysics<T, D> {
+/// A PhysicsModel configured by user-defined functions (closures).
+/// Uses concrete `DualDVec64` type for automatic differentiation.
+/// `D` is a generic type for any user-defined data/parameters struct.
+pub struct FunctionalPhysics<D> {
     pub num_vars_per_cell: usize,
     pub data: D,
-    pub(crate) flux: FluxFn<T, D>,
-    pub reaction: ReactionFn<T, D>,
+    pub(crate) flux: FluxFn<D>,
+    pub reaction: ReactionFn<D>,
     #[allow(unused)]
-    pub storage: StorageFn<T, D>,
+    pub storage: StorageFn<D>,
     pub bc_registry: BCRegistry,
     pub face_tags: HashMap<usize, String>,
     pub field_names: Vec<Field>,
@@ -52,21 +52,20 @@ pub struct FunctionalPhysics<T, D> {
 
     pub dt: Option<f64>,
     pub theta: f64, // 1.0 = Backward Euler, 0.5 = Crank-Nicolson, 0.0 = Forward Euler (ah heeeell nah)
-    pub s_old_cache: Option<DVector<T>>,
-    pub spatial_old_cache: Option<DVector<T>>,
+    pub s_old_cache: Option<DVector<DualDVec64>>,
+    pub spatial_old_cache: Option<DVector<DualDVec64>>,
 }
 
-impl<T, D> FunctionalPhysics<T, D>
+impl<D> FunctionalPhysics<D>
 where
-    T: nalgebra::Scalar + DualNum<f64> + num_traits::Zero,
     D: 'static,
 {
     pub fn new(
         field_names: Vec<Field>,
         data: D,
-        flux: FluxFn<T, D>,
-        reaction: ReactionFn<T, D>,
-        storage: StorageFn<T, D>,
+        flux: FluxFn<D>,
+        reaction: ReactionFn<D>,
+        storage: StorageFn<D>,
     ) -> Self {
         let num_vars = field_names.len();
         Self {
@@ -187,56 +186,57 @@ where
             + normal.nz * (face_centroid[2] - cell_centroid[2])
     }
 
-    /// Compute ghost values for boundary conditions.
-    /// Returns a vector of ghost values for all variables at a boundary face.
+    /// Compute boundary values for Dirichlet boundary conditions.
+    /// Returns a vector of boundary values for all variables at a boundary face.
+    /// Warns if non-Dirichlet BCs are encountered (Robin/Neumann not yet implemented).
     #[inline]
-    pub fn compute_ghost_values(
+    pub fn compute_boundary_values(
         &self,
-        u_interior: &[T],
+        u_interior: &[DualDVec64],
         face: &Face,
         cell_centroid: [f64; 3],
         label: &str,
-        var_of_interest: usize,
-    ) -> (Vec<T>, bool) {
+    ) -> Vec<DualDVec64> {
         let (p, mut n) = Self::face_geometry(face);
-        let mut delta = Self::bc_delta(face.centroid, cell_centroid, n);
+        let delta = Self::bc_delta(face.centroid, cell_centroid, n);
 
-        // Case  : normal doesn't point outward from the domain
+        // Ensure normal points outward from the domain
         if delta < 0.0 {
             n.nx = -n.nx;
             n.ny = -n.ny;
             n.nz = -n.nz;
-            delta = -delta;
         }
 
         let t = self.current_time.unwrap_or(0.0);
 
-        let mut is_strong_dirichlet = false;
-        ((0..self.num_vars_per_cell)
+        (0..self.num_vars_per_cell)
             .map(|j| {
                 let field = &self.field_names[j];
                 if let Some(rule) = self.bc_registry.find_for(field.0.as_ref(), label, p, n) {
-                    if rule.style == DirichletStyle::Strong {
-                        if j == var_of_interest {
-                            is_strong_dirichlet = true;
-                        }
-                        return T::from((rule.bc.gamma)(t, p, n) / (rule.bc.alpha)(t, p, n));
-                    }
+                    // Check for pure Dirichlet (alpha != 0, beta == 0)
                     let alpha = (rule.bc.alpha)(t, p, n);
                     let beta = (rule.bc.beta)(t, p, n);
                     let gamma = (rule.bc.gamma)(t, p, n);
-                    return robin_ghost_val(u_interior[j].clone(), alpha, beta, gamma, delta);
+                    
+                    if beta.abs() > 1e-14 || alpha.abs() < 1e-14 {
+                        eprintln!("WARN: Robin/Neumann BCs not yet supported (field '{}', label '{}')", field.0, label);
+                        return u_interior[j].clone();
+                    }
+                    
+                    // Pure Dirichlet: u = gamma / alpha
+                    DualDVec64::from(gamma / alpha)
                 } else {
-                    return u_interior[j].clone();
+                    // No BC specified: homogeneous Neumann (zero flux)
+                    u_interior[j].clone()
                 }
             })
-            .collect(), is_strong_dirichlet)
+            .collect()
     }
 
     /// Compute the residual contribution from all fluxes across faces.
-    fn flux_contribution(&self, mesh: &Mesh, u: &DVector<T>) -> DVector<T> {
+    fn flux_contribution(&self, mesh: &Mesh, u: &DVector<DualDVec64>) -> DVector<DualDVec64> {
         let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
-        let mut f_flux = DVector::from_vec(vec![T::zero(); self.num_vars_per_cell]);
+        let mut f_flux = DVector::from_vec(vec![DualDVec64::from_re(0.0); self.num_vars_per_cell]);
 
         for (face_idx, face) in mesh.faces.iter().enumerate() {
             match face.neighbor_cell_ids {
@@ -246,7 +246,7 @@ where
                     // Exterior cell
                     let u_l = u.rows(l * self.num_vars_per_cell, self.num_vars_per_cell);
 
-                    f_flux.fill(T::zero());
+                    f_flux.fill(DualDVec64::from_re(0.0));
                     (self.flux)(
                         f_flux.as_mut_slice(),
                         u_k.as_slice(),
@@ -271,26 +271,26 @@ where
                     };
                     let u_k = u.rows(k * self.num_vars_per_cell, self.num_vars_per_cell);
 
-                    let (ghost, _) = self.compute_ghost_values(
+                    // Get Dirichlet boundary values at the face
+                    let u_boundary = self.compute_boundary_values(
                         u_k.as_slice(),
                         face,
                         mesh.cells[k].centroid,
                         label,
-                        0, // var_of_interest (not used here)
                     );
 
-                    f_flux.fill(T::zero());
+                    f_flux.fill(DualDVec64::from_re(0.0));
                     (self.flux)(
                         f_flux.as_mut_slice(),
                         u_k.as_slice(),
-                        &ghost,
+                        &u_boundary,
                         face,
                         &self.data,
                     );
 
                     let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    // FIX: Ghost node is mirrored across face, so effective distance is 2*d
-                    let scale = Self::face_scale(face, 2.0 * d);
+                    // Distance from cell centroid to boundary face
+                    let scale = Self::face_scale(face, d);
 
                     for i in 0..self.num_vars_per_cell {
                         residual[k * self.num_vars_per_cell + i] += f_flux[i].clone() * scale;
@@ -303,14 +303,14 @@ where
     }
 
     /// Compute the residual contribution from reactions/sources within each cell.
-    fn reaction_contribution(&self, mesh: &Mesh, u: &DVector<T>) -> DVector<T> {
+    fn reaction_contribution(&self, mesh: &Mesh, u: &DVector<DualDVec64>) -> DVector<DualDVec64> {
         let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
-        let mut f_reaction = DVector::from_vec(vec![T::zero(); self.num_vars_per_cell]);
+        let mut f_reaction = DVector::from_vec(vec![DualDVec64::from_re(0.0); self.num_vars_per_cell]);
 
         for cell in &mesh.cells {
             let u_cell = u.rows(cell.id * self.num_vars_per_cell, self.num_vars_per_cell);
 
-            f_reaction.fill(T::zero());
+            f_reaction.fill(DualDVec64::from_re(0.0));
 
             (self.reaction)(
                 f_reaction.as_mut_slice(),
@@ -327,14 +327,14 @@ where
         residual
     }
 
-    pub fn storage_contribution(&self, mesh: &Mesh, u: &DVector<T>) -> DVector<T> {
+    pub fn storage_contribution(&self, mesh: &Mesh, u: &DVector<DualDVec64>) -> DVector<DualDVec64> {
         let mut s_vec = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
-        let mut f_storage = DVector::from_vec(vec![T::zero(); self.num_vars_per_cell]);
+        let mut f_storage = DVector::from_vec(vec![DualDVec64::from_re(0.0); self.num_vars_per_cell]);
 
         for cell in &mesh.cells {
             let u_cell = u.rows(cell.id * self.num_vars_per_cell, self.num_vars_per_cell);
 
-            f_storage.fill(T::zero());
+            f_storage.fill(DualDVec64::from_re(0.0));
 
             (self.storage)(
                 f_storage.as_mut_slice(),
@@ -356,7 +356,7 @@ where
         self.dt = Some(dt);
 
         let u_old_t = u_old.map(|x| {
-            T::from_f64(x).expect("Oopsie, u_old should be convertible to the AD numerical type")
+            DualDVec64::from(x)
         });
 
         let s_old_t = self.storage_contribution(mesh, &u_old_t);
@@ -373,21 +373,19 @@ where
     }
 
     /// Calculate the full residual vector.
-    pub fn calculate_residual(&self, mesh: &Mesh, u: DVector<T>) -> DVector<T> {
-        let mut spatial_current = self.flux_contribution(mesh, &u)
+    pub fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
+        let spatial_current = self.flux_contribution(mesh, &u)
             + self.reaction_contribution(mesh, &u);
-        let theta_t = T::from_f64(self.theta)
-            .expect("Oopsie, theta should be convertible to the AD numerical type");
+        let theta_t = DualDVec64::from(self.theta);
 
         let mut residual = spatial_current * theta_t.clone();
 
         if let Some(spation_old) = &self.spatial_old_cache {
-            residual += spation_old * (T::one() - theta_t);
+            residual += spation_old * (DualDVec64::from(1.0) - theta_t);
         }
 
         if let (Some(dt), Some(s_old)) = (self.dt, &self.s_old_cache) {
-            let dt_t = T::from_f64(dt)
-                .expect("Oopsie, dt should be convertible to the AD numerical type");
+            let dt_t = DualDVec64::from(dt);
             residual += (self.storage_contribution(mesh, &u) - s_old.clone()) / dt_t;
         }
         residual

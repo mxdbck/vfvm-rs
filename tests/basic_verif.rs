@@ -15,7 +15,7 @@ struct DiffusionParams { k: f64 }
 
 // The PDE
 // -k * d2T/dx2 = 0
-fn setup_diffusion(params: DiffusionParams) -> FunctionalPhysics<DualDVec64, DiffusionParams> {
+fn setup_diffusion(params: DiffusionParams) -> FunctionalPhysics<DiffusionParams> {
     let flux = Box::new(|f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _: &Face, data: &DiffusionParams| {
         f[0] = (u_l[0].clone() - u_k[0].clone()) * data.k;
     });
@@ -29,7 +29,7 @@ struct PoissonParams { source: f64 }
 
 // The PDE
 // -d2u/dx2 = source
-fn setup_poisson(params: PoissonParams) -> FunctionalPhysics<DualDVec64, PoissonParams> {
+fn setup_poisson(params: PoissonParams) -> FunctionalPhysics<PoissonParams> {
     let flux = Box::new(|f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _: &Face, _: &PoissonParams| {
         f[0] = -(u_l[0].clone() - u_k[0].clone());
     });
@@ -40,8 +40,8 @@ fn setup_poisson(params: PoissonParams) -> FunctionalPhysics<DualDVec64, Poisson
     FunctionalPhysics::new(vec![Field::from("u")], params, flux, reaction, storage)
 }
 
-struct SimpleModel<D: Clone + 'static> { physics: FunctionalPhysics<DualDVec64, D> }
-impl<D: Clone + 'static> PhysicsModel<DualDVec64> for SimpleModel<D> {
+struct SimpleModel<D: Clone + 'static> { physics: FunctionalPhysics<D> }
+impl<D: Clone + 'static> PhysicsModel for SimpleModel<D> {
     fn num_variables(&self) -> usize { self.physics.num_vars_per_cell }
     fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> { self.physics.calculate_residual(mesh, u) }
     fn apply_boundary_conditions(&mut self, _: &Mesh, _: &mut Vec<f64>) {}

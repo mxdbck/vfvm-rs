@@ -26,7 +26,7 @@ pub struct SparseNewtonSolver {
 impl SparseNewtonSolver {
     pub fn solve<D: 'static>(
         &self,
-        model: &FunctionalPhysics<DualDVec64, D>,
+        model: &FunctionalPhysics<D>,
         mesh: &Mesh,
         initial_guess: DVector<f64>,
         logging: bool,
@@ -213,7 +213,7 @@ impl SparseNewtonSolver {
 
     pub fn compute_residual_and_jacobian<D: 'static>(
         &self,
-        model: &FunctionalPhysics<DualDVec64, D>,
+        model: &FunctionalPhysics<D>,
         mesh: &Mesh,
         u: &DVector<f64>,
     ) -> (DVector<f64>, kryst::matrix::sparse::CsrMatrix<f64>) {
