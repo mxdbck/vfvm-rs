@@ -3,7 +3,7 @@ use nalgebra::DVector;
 use num_dual::DualDVec64;
 
 use vfvm_rs::discretization::generator::create_voronoi_mesh;
-use vfvm_rs::discretization::mesh::{Cell, Face, Mesh};
+use vfvm_rs::discretization::mesh::{Cell, Face};
 use vfvm_rs::discretization::fvm::FvmDiscretizer;
 use vfvm_rs::numerics::nonlinear::NonlinearSolver;
 use vfvm_rs::physics::bc::{BCRegistry, BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
@@ -41,15 +41,6 @@ fn setup_poisson(params: PoissonParams) -> FunctionalPhysics<PoissonParams> {
     FunctionalPhysics::new(vec![Field::from("u")], params, flux, reaction, storage)
 }
 
-struct SimpleModel<D: Clone + 'static> { physics: FunctionalPhysics<D> }
-impl<D: Clone + 'static> PhysicsModel for SimpleModel<D> {
-    fn num_variables(&self) -> usize { self.physics.num_vars_per_cell }
-    fn calculate_residual(&mut self, mesh: &Mesh, bc: &BCRegistry, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
-        let discretizer = FvmDiscretizer::new(&mut self.physics, mesh, bc);
-        discretizer.calculate_residual(u)
-    }
-}
-
 #[test]
 fn basic_verif() {
     let width = 1.0;
@@ -85,16 +76,16 @@ fn basic_verif() {
     );
 
     println!("Test 1: Linear Diffusion");
-    let mut model1 = SimpleModel { physics: setup_diffusion(DiffusionParams { k: 1.0 }) };
-    model1.physics.face_tags.insert(left_face, "left".to_string());
-    model1.physics.face_tags.insert(right_face, "right".to_string());
+    let mut physics1 = setup_diffusion(DiffusionParams { k: 1.0 });
+    physics1.face_tags.insert(left_face, "left".to_string());
+    physics1.face_tags.insert(right_face, "right".to_string());
 
     let mut bc_registry1 = BCRegistry::default();
     bc_registry1.add(BCRule { field: Field::from("T"), on: BoundarySelector::Label("left".to_string()), bc: GeneralizedBC::dirichlet(0.0), style: DirichletStyle::Strong });
     bc_registry1.add(BCRule { field: Field::from("T"), on: BoundarySelector::Label("right".to_string()), bc: GeneralizedBC::dirichlet(100.0), style: DirichletStyle::Strong });
 
     let init = DVector::zeros(mesh.cells.len());
-    let discretizer1 = FvmDiscretizer::new(&mut model1.physics, &mesh, &bc_registry1);
+    let discretizer1 = FvmDiscretizer::new(&mut physics1, &mesh, &bc_registry1);
     let result1 = solver.solve(&discretizer1, init).expect("Solved");
 
     let mut max_err = 0.0;
@@ -110,16 +101,16 @@ fn basic_verif() {
 
     println!("Test 2: Poisson Equation");
     let source_s = 10.0;
-    let mut model2 = SimpleModel { physics: setup_poisson(PoissonParams { source: source_s }) };
-    model2.physics.face_tags.insert(left_face, "left".to_string());
-    model2.physics.face_tags.insert(right_face, "right".to_string());
+    let mut physics2 = setup_poisson(PoissonParams { source: source_s });
+    physics2.face_tags.insert(left_face, "left".to_string());
+    physics2.face_tags.insert(right_face, "right".to_string());
 
     let mut bc_registry2 = BCRegistry::default();
     bc_registry2.add(BCRule { field: Field::from("u"), on: BoundarySelector::Label("left".to_string()), bc: GeneralizedBC::dirichlet(0.0), style: DirichletStyle::Strong });
     bc_registry2.add(BCRule { field: Field::from("u"), on: BoundarySelector::Label("right".to_string()), bc: GeneralizedBC::dirichlet(0.0), style: DirichletStyle::Strong });
 
     let init = DVector::zeros(mesh.cells.len());
-    let discretizer2 = FvmDiscretizer::new(&mut model2.physics, &mesh, &bc_registry2);
+    let discretizer2 = FvmDiscretizer::new(&mut physics2, &mesh, &bc_registry2);
     let result2 = solver.solve(&discretizer2, init).expect("Solved");
 
     let mut max_err = 0.0;

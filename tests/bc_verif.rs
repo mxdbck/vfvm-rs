@@ -1,5 +1,3 @@
-use std::u32;
-
 use glam::DVec3;
 use nalgebra::DVector;
 use num_dual::DualDVec64;
@@ -25,17 +23,6 @@ fn setup_linear(params: LinearParams) -> FunctionalPhysics<LinearParams> {
     let reaction = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &LinearParams| f[0] = DualDVec64::from_re(0.0));
     let storage = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &LinearParams| f[0] = DualDVec64::from_re(0.0));
     FunctionalPhysics::new(vec![Field::from("u")], params, flux, reaction, storage)
-}
-
-struct TestModel<D: Clone + 'static> {
-    physics: FunctionalPhysics<D>,
-}
-impl<D: Clone + 'static> PhysicsModel for TestModel<D> {
-    fn num_variables(&self) -> usize { self.physics.num_vars_per_cell }
-    fn calculate_residual(&mut self, mesh: &Mesh, bc: &BCRegistry, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
-        let discretizer = FvmDiscretizer::new(&mut self.physics, mesh, bc);
-        discretizer.calculate_residual(u)
-    }
 }
 
 fn setup_1d_mesh(width: f64, num_points: usize) -> (Mesh, usize, usize) {
@@ -65,9 +52,9 @@ fn verify_neumann() {
     let (mesh, left_face, right_face) = setup_1d_mesh(1.0, 50);
     let q_flux = 5.0;
 
-    let mut model = TestModel { physics: setup_linear(LinearParams) };
-    model.physics.face_tags.insert(left_face, "left".to_string());
-    model.physics.face_tags.insert(right_face, "right".to_string());
+    let mut physics = setup_linear(LinearParams);
+    physics.face_tags.insert(left_face, "left".to_string());
+    physics.face_tags.insert(right_face, "right".to_string());
 
     let mut bc_registry = BCRegistry::default();
     bc_registry.add(BCRule {
@@ -93,7 +80,7 @@ fn verify_neumann() {
     };
     let mut solver = NonlinearSolver::new(config);
     let init = DVector::zeros(mesh.cells.len());
-    let discretizer = FvmDiscretizer::new(&mut model.physics, &mesh, &bc_registry);
+    let discretizer = FvmDiscretizer::new(&mut physics, &mesh, &bc_registry);
 
     let result = solver.solve(&discretizer, init).expect("Solved");
 
@@ -130,9 +117,9 @@ fn verify_robin() {
 
     let (mesh, left_face, right_face) = setup_1d_mesh(1.0, 50);
 
-    let mut model = TestModel { physics: setup_linear(LinearParams) };
-    model.physics.face_tags.insert(left_face, "left".to_string());
-    model.physics.face_tags.insert(right_face, "right".to_string());
+    let mut physics = setup_linear(LinearParams);
+    physics.face_tags.insert(left_face, "left".to_string());
+    physics.face_tags.insert(right_face, "right".to_string());
 
     let mut bc_registry = BCRegistry::default();
     bc_registry.add(BCRule {
@@ -157,7 +144,7 @@ fn verify_robin() {
     };
     let mut solver = NonlinearSolver::new(config);
     let init = DVector::from_element(mesh.cells.len(), 5.0);
-    let discretizer = FvmDiscretizer::new(&mut model.physics, &mesh, &bc_registry);
+    let discretizer = FvmDiscretizer::new(&mut physics, &mesh, &bc_registry);
 
     let result = solver.solve(&discretizer, init).expect("Solved");
 
