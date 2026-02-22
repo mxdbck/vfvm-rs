@@ -1,5 +1,7 @@
 use crate::discretization::mesh::Mesh;
-use crate::models::pn::pn::{PnJunctionModel, PnJunctionParams};
+use crate::models::pn::pn::PnJunctionParams;
+use crate::physics::functional::NumericalTolerances;
+use log::info;
 use nalgebra::DVector;
 use std::fs::File;
 use std::io::{self, Write};
@@ -41,7 +43,11 @@ pub struct SimulationSummary {
 }
 
 impl SimulationSummary {
-    pub fn from_problem(mesh: &Mesh, params: &PnJunctionParams, model: &PnJunctionModel) -> Self {
+    pub fn new(
+        mesh: &Mesh,
+        params: &PnJunctionParams,
+        tolerances: &NumericalTolerances,
+    ) -> Self {
         let num_cells = mesh.cells.len();
         let num_faces = mesh.faces.len();
         let num_nodes = mesh.nodes.len();
@@ -88,8 +94,8 @@ impl SimulationSummary {
             left_p,
             right_n,
             right_p,
-            min_distance_tol: model.functional.tolerances.min_distance,
-            eps_diagonal: model.functional.tolerances.eps_diagonal,
+            min_distance_tol: tolerances.min_distance,
+            eps_diagonal: tolerances.eps_diagonal,
             dense_iterations: None,
             dense_final_residual: None,
             sparse_iterations: None,
@@ -234,26 +240,26 @@ impl SimulationSummary {
     }
 
     pub fn print_to_console(&self) {
-        println!("\n{}", "=".repeat(60));
-        println!("SIMULATION SUMMARY");
-        println!("{}", "=".repeat(60));
-        println!(
+        info!("{}", "=".repeat(60));
+        info!("SIMULATION SUMMARY");
+        info!("{}", "=".repeat(60));
+        info!(
             "Mesh:          {} cells, {} nodes",
             self.num_cells, self.num_nodes
         );
-        println!("Built-in V:    {:.4} V", self.builtin_voltage);
-        println!(
+        info!("Built-in V:    {:.4} V", self.builtin_voltage);
+        info!(
             "Tolerance:     {:.3e} (= {:.2e} × spacing)",
             self.min_distance_tol,
             self.min_distance_tol / self.min_cell_spacing
         );
         if let (Some(d_iter), Some(s_iter)) = (self.dense_iterations, self.sparse_iterations) {
-            println!("Iterations:    dense={}, sparse={}", d_iter, s_iter);
+            info!("Iterations:    dense={}, sparse={}", d_iter, s_iter);
         }
         if let Some(max_diff) = self.max_solution_diff {
-            println!("Max diff:      {:.3e}", max_diff);
+            info!("Max diff:      {:.3e}", max_diff);
         }
-        println!("{}\n", "=".repeat(60));
+        info!("{}", "=".repeat(60));
     }
 }
 

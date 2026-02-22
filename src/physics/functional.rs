@@ -1,6 +1,6 @@
 use crate::discretization::mesh::{Cell, Face, Mesh};
 use crate::physics::bc::{BCRegistry, Field, Normal, Point};
-use nalgebra::DVector;
+use log::{info, warn};
 use num_dual::DualDVec64;
 use std::collections::HashMap;
 
@@ -8,13 +8,21 @@ use std::collections::HashMap;
 // Using concrete DualDVec64 type for automatic differentiation.
 
 // Flux function: f(flux_vector, u_left, u_right, face_geometry, user_data)
-type FluxFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &[DualDVec64], &Face, &D)>;
+pub type FluxFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &[DualDVec64], &Face, &D) + Sync + Send>;
 
 // Reaction/Source function: f(source_vector, u, cell_geometry, user_data)
-type ReactionFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D)>;
+pub type ReactionFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send>;
 
 // Storage function (for time-dependent term): f(storage_vector, u, cell_geometry, user_data)
-type StorageFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D)>;
+pub type StorageFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send>;
+
+/// Action to take at a boundary for a specific variable.
+pub enum BoundaryAction {
+    /// Dirichlet: Fix the value at the boundary face.
+    Dirichlet(DualDVec64),
+    /// InjectedFlux: Apply an exact flux (Neumann/Robin) directly to the residual.
+    InjectedFlux(DualDVec64),
+}
 
 #[allow(unused)]
 #[derive(Clone, Copy, Debug)]
@@ -40,20 +48,14 @@ impl Default for NumericalTolerances {
 pub struct FunctionalPhysics<D> {
     pub num_vars_per_cell: usize,
     pub data: D,
-    pub(crate) flux: FluxFn<D>,
+    pub flux: FluxFn<D>,
     pub reaction: ReactionFn<D>,
     #[allow(unused)]
     pub storage: StorageFn<D>,
-    pub bc_registry: BCRegistry,
     pub face_tags: HashMap<usize, String>,
     pub field_names: Vec<Field>,
     pub current_time: Option<f64>,
     pub tolerances: NumericalTolerances,
-
-    pub dt: Option<f64>,
-    pub theta: f64, // 1.0 = Backward Euler, 0.5 = Crank-Nicolson, 0.0 = Forward Euler (ah heeeell nah)
-    pub s_old_cache: Option<DVector<DualDVec64>>,
-    pub spatial_old_cache: Option<DVector<DualDVec64>>,
 }
 
 impl<D> FunctionalPhysics<D>
@@ -74,15 +76,10 @@ where
             flux,
             reaction,
             storage,
-            bc_registry: BCRegistry::default(),
             face_tags: HashMap::new(),
             field_names,
             current_time: None,
             tolerances: NumericalTolerances::default(),
-            dt: None,
-            theta: 1.0, // Default to Implicit Euler
-            s_old_cache: None,
-            spatial_old_cache: None,
         }
     }
 
@@ -111,7 +108,7 @@ where
         }
 
         if count == 0 {
-            eprintln!("WARNING: No interior faces found for tolerance calibration");
+            warn!("No interior faces found for tolerance calibration");
             return;
         }
 
@@ -120,15 +117,16 @@ where
         let old_tol = self.tolerances.min_distance;
         self.tolerances.min_distance = min_spacing * 1e-8;
 
-        println!("Tolerance calibration:");
-        println!(
+        info!("Tolerance calibration:");
+        info!(
             "  Mesh spacing: min={:.3e}, max={:.3e}",
             min_spacing, max_spacing
         );
-        println!("  Old min_distance: {:.3e}", old_tol);
-        println!(
-            "  New min_distance: {:.3e} (= {:.2e} × min_spacing)\n",
-            self.tolerances.min_distance, 1e-8
+        info!("  Old min_distance: {:.3e}", old_tol);
+        info!(
+            "  New min_distance: {:.3e} (= {:.2e} × min_spacing)",
+            self.tolerances.min_distance,
+            1e-8
         );
     }
 
@@ -147,9 +145,12 @@ where
 
         #[cfg(debug_assertions)]
         if d < self.tolerances.min_distance {
-            eprintln!(
-                "WARNING: Clamped distance {:.3e} → {:.3e} between {:?} and {:?}",
-                d, safe_d, p1, p2
+            warn!(
+                "Clamped distance {:.3e} → {:.3e} between {:?} and {:?}",
+                d,
+                safe_d,
+                p1,
+                p2
             );
         }
 
@@ -186,9 +187,7 @@ where
             + normal.nz * (face_centroid[2] - cell_centroid[2])
     }
 
-    /// Compute boundary values for Dirichlet boundary conditions.
-    /// Returns a vector of boundary values for all variables at a boundary face.
-    /// Warns if non-Dirichlet BCs are encountered (Robin/Neumann not yet implemented).
+    /// Compute boundary actions (Dirichlet values or Injected Fluxes).
     #[inline]
     pub fn compute_boundary_values(
         &self,
@@ -196,7 +195,8 @@ where
         face: &Face,
         cell_centroid: [f64; 3],
         label: &str,
-    ) -> Vec<DualDVec64> {
+        bc_registry: &BCRegistry,
+    ) -> Vec<BoundaryAction> {
         let (p, mut n) = Self::face_geometry(face);
         let delta = Self::bc_delta(face.centroid, cell_centroid, n);
 
@@ -212,182 +212,37 @@ where
         (0..self.num_vars_per_cell)
             .map(|j| {
                 let field = &self.field_names[j];
-                if let Some(rule) = self.bc_registry.find_for(field.0.as_ref(), label, p, n) {
-                    // Check for pure Dirichlet (alpha != 0, beta == 0)
+                if let Some(rule) = bc_registry.find_for(field.0.as_ref(), label, p, n) {
                     let alpha = (rule.bc.alpha)(t, p, n);
                     let beta = (rule.bc.beta)(t, p, n);
                     let gamma = (rule.bc.gamma)(t, p, n);
-                    
-                    if beta.abs() > 1e-14 || alpha.abs() < 1e-14 {
-                        eprintln!("WARN: Robin/Neumann BCs not yet supported (field '{}', label '{}')", field.0, label);
-                        return u_interior[j].clone();
+
+                    if beta.abs() < 1e-14 {
+                        // Pure Dirichlet: u = gamma / alpha
+                        BoundaryAction::Dirichlet(DualDVec64::from(gamma / alpha))
+                    } else {
+                        // Neumann/Robin: Flux = (gamma - alpha * u_face) / beta
+                        // Approximation: u_face = u_k + gradient * d = u_k - Flux * d
+                        // Flux = (gamma - alpha * (u_k - Flux * d)) / beta
+                        // Flux * (beta + alpha * d) = gamma - alpha * u_k
+                        // Flux = (gamma - alpha * u_k) / (beta + alpha * d)
+
+                        let d = delta.abs();
+                        let denom = beta + alpha * d;
+
+                        let u_k = &u_interior[j];
+                        let val = (DualDVec64::from(gamma) - u_k.clone() * alpha) / denom;
+
+                        // We compute the total flux (density * area) to inject into the residual.
+                        // NOTE: GeneralizedBC defines BCs on the primitive variable u (and its derivative).
+                        // Since Flux = - Gradient, we negate the computed gradient value.
+                        BoundaryAction::InjectedFlux(-val * face.area)
                     }
-                    
-                    // Pure Dirichlet: u = gamma / alpha
-                    DualDVec64::from(gamma / alpha)
                 } else {
                     // No BC specified: homogeneous Neumann (zero flux)
-                    u_interior[j].clone()
+                    BoundaryAction::InjectedFlux(DualDVec64::from(0.0))
                 }
             })
             .collect()
-    }
-
-    /// Compute the residual contribution from all fluxes across faces.
-    fn flux_contribution(&self, mesh: &Mesh, u: &DVector<DualDVec64>) -> DVector<DualDVec64> {
-        let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
-        let mut f_flux = DVector::from_vec(vec![DualDVec64::from_re(0.0); self.num_vars_per_cell]);
-
-        for (face_idx, face) in mesh.faces.iter().enumerate() {
-            match face.neighbor_cell_ids {
-                (k, Some(l)) => {
-                    // Interior cell
-                    let u_k = u.rows(k * self.num_vars_per_cell, self.num_vars_per_cell);
-                    // Exterior cell
-                    let u_l = u.rows(l * self.num_vars_per_cell, self.num_vars_per_cell);
-
-                    f_flux.fill(DualDVec64::from_re(0.0));
-                    (self.flux)(
-                        f_flux.as_mut_slice(),
-                        u_k.as_slice(),
-                        u_l.as_slice(),
-                        face,
-                        &self.data,
-                    );
-
-                    let d = self.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
-                    let scale = Self::face_scale(face, d);
-
-                    for i in 0..self.num_vars_per_cell {
-                        let flux_val = f_flux[i].clone() * scale;
-                        residual[k * self.num_vars_per_cell + i] += flux_val.clone();
-                        residual[l * self.num_vars_per_cell + i] -= flux_val;
-                    }
-                }
-                // Boundary cell
-                (k, None) => {
-                    let Some(label) = self.face_tags.get(&face_idx) else {
-                        continue;
-                    };
-                    let u_k = u.rows(k * self.num_vars_per_cell, self.num_vars_per_cell);
-
-                    // Get Dirichlet boundary values at the face
-                    let u_boundary = self.compute_boundary_values(
-                        u_k.as_slice(),
-                        face,
-                        mesh.cells[k].centroid,
-                        label,
-                    );
-
-                    f_flux.fill(DualDVec64::from_re(0.0));
-                    (self.flux)(
-                        f_flux.as_mut_slice(),
-                        u_k.as_slice(),
-                        &u_boundary,
-                        face,
-                        &self.data,
-                    );
-
-                    let d = self.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    // Distance from cell centroid to boundary face
-                    let scale = Self::face_scale(face, d);
-
-                    for i in 0..self.num_vars_per_cell {
-                        residual[k * self.num_vars_per_cell + i] += f_flux[i].clone() * scale;
-                    }
-                }
-            }
-        }
-
-        residual
-    }
-
-    /// Compute the residual contribution from reactions/sources within each cell.
-    fn reaction_contribution(&self, mesh: &Mesh, u: &DVector<DualDVec64>) -> DVector<DualDVec64> {
-        let mut residual = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
-        let mut f_reaction = DVector::from_vec(vec![DualDVec64::from_re(0.0); self.num_vars_per_cell]);
-
-        for cell in &mesh.cells {
-            let u_cell = u.rows(cell.id * self.num_vars_per_cell, self.num_vars_per_cell);
-
-            f_reaction.fill(DualDVec64::from_re(0.0));
-
-            (self.reaction)(
-                f_reaction.as_mut_slice(),
-                u_cell.as_slice(),
-                cell,
-                &self.data,
-            );
-
-            for i in 0..self.num_vars_per_cell {
-                residual[cell.id * self.num_vars_per_cell + i] += f_reaction[i].clone() * cell.volume;
-            }
-        }
-
-        residual
-    }
-
-    pub fn storage_contribution(&self, mesh: &Mesh, u: &DVector<DualDVec64>) -> DVector<DualDVec64> {
-        let mut s_vec = DVector::zeros(mesh.cells.len() * self.num_vars_per_cell);
-        let mut f_storage = DVector::from_vec(vec![DualDVec64::from_re(0.0); self.num_vars_per_cell]);
-
-        for cell in &mesh.cells {
-            let u_cell = u.rows(cell.id * self.num_vars_per_cell, self.num_vars_per_cell);
-
-            f_storage.fill(DualDVec64::from_re(0.0));
-
-            (self.storage)(
-                f_storage.as_mut_slice(),
-                u_cell.as_slice(),
-                cell,
-                &self.data,
-            );
-
-            for i in 0..self.num_vars_per_cell {
-                s_vec[cell.id * self.num_vars_per_cell + i] += f_storage[i].clone() * cell.volume;
-            }
-        }
-        s_vec
-    }
-
-    /// Prepare the physics functional for a transient time step.
-    /// This pre-calculates S(u_old) so it doesn't need to be recomputed during Newton iterations.
-    pub fn prepare_time_step(&mut self, mesh: &Mesh, u_old: DVector<f64>, dt: f64) {
-        self.dt = Some(dt);
-
-        let u_old_t = u_old.map(|x| {
-            DualDVec64::from(x)
-        });
-
-        let s_old_t = self.storage_contribution(mesh, &u_old_t);
-
-        self.s_old_cache = Some(s_old_t);
-
-        if self.theta < 1.0 {
-            let spation_old_t = self.flux_contribution(mesh, &u_old_t)
-                + self.reaction_contribution(mesh, &u_old_t);
-            self.spatial_old_cache = Some(spation_old_t);
-        } else {
-            self.spatial_old_cache = None;
-        }
-    }
-
-    /// Calculate the full residual vector.
-    pub fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
-        let spatial_current = self.flux_contribution(mesh, &u)
-            + self.reaction_contribution(mesh, &u);
-        let theta_t = DualDVec64::from(self.theta);
-
-        let mut residual = spatial_current * theta_t.clone();
-
-        if let Some(spation_old) = &self.spatial_old_cache {
-            residual += spation_old * (DualDVec64::from(1.0) - theta_t);
-        }
-
-        if let (Some(dt), Some(s_old)) = (self.dt, &self.s_old_cache) {
-            let dt_t = DualDVec64::from(dt);
-            residual += (self.storage_contribution(mesh, &u) - s_old.clone()) / dt_t;
-        }
-        residual
     }
 }

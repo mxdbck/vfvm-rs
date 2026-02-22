@@ -1,3 +1,5 @@
+_This is no longer how the library handles boundary conditions._
+
 Place a ghost cell mirrored across the face. Let:
 - $u_i=$ interior cell value,
 - $u_g=$ ghost value we'll choose,
