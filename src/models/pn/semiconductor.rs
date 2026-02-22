@@ -7,7 +7,7 @@ use num_dual::{DualDVec64, DualNum};
 /// Creates a FunctionalPhysics object configured for the drift-diffusion model.
 pub fn setup_semiconductor_physics(
     params: PnJunctionParams,
-) -> FunctionalPhysics<DualDVec64, PnJunctionParams> {
+) -> FunctionalPhysics<PnJunctionParams> {
     let reaction = Box::new(
         |f: &mut [DualDVec64], u: &[DualDVec64], cell: &Cell, data: &PnJunctionParams| {
             let (psi, phi_n, phi_p) = (&u[0], &u[1], &u[2]);

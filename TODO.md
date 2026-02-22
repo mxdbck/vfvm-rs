@@ -21,20 +21,23 @@
 - [x] Make a simple electrostatics example.
 - [x] Implement transient simulations.
 
+- [x] Improve Logging
+- [x] Benchmark
+- [x] Parallize the trivially parallelizable
+- [x] Implement all boundary condition types
+- [ ] Bump dependencies
+- [ ] Fix preconditionning
+- [ ] Compatbility with ParaView
+- [ ] consider abstracting the linear solver step to optionally use direct sparse solvers (UMFPACK, MUMPS ...) for highly nonlinear, coupled, or ill-conditioned systems.
+
 - [ ] Make documents that explains the code and more complex bits. 
 - [ ] Look into Schaffeter-Gummel from WIAS paper
 - [ ] Look into adaptive time stepping.
-- [ ] Add some line search to dense solver too.
 - [ ] Consider adding a method to validate that all boundary faces have associated BCs.
 
-- [ ] Create traits.rs for PhysicsModel
-- [ ] Use builder pattern for simulation
 - [ ] Implement more complex domain cell spacing.
 
-- [ ] Find a clean way to do residual calculation on f64 instead of necessarily Dual numbers.
 - [ ] Remove the need for #[allow(unused)]
-
-
 
 ### Examples to Implement
 - [ ] Heat conduction (Idea : copper on silicon with bottom heating and convective cooling on top)

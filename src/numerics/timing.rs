@@ -1,4 +1,5 @@
 #![allow(unused)]
+use log::info;
 use std::cell::RefCell;
 use std::time::Duration;
 
@@ -29,32 +30,32 @@ impl TimingStats {
         // Use the minimum of the two lengths for averaging
         let n = self.jacobian_times.len().min(self.linear_solve_times.len());
 
-        println!("\n{}", "=".repeat(60));
-        println!("{:^60}", "SOLVER TIMING SUMMARY");
-        println!("{}", "=".repeat(60));
-        println!(
+        info!("{}", "=".repeat(60));
+        info!("{:^60}", "SOLVER TIMING SUMMARY");
+        info!("{}", "=".repeat(60));
+        info!(
             "Total solver time:             {:.3}s",
             self.total_time.as_secs_f64()
         );
-        println!("{}", "-".repeat(60));
-        println!("Component breakdown:");
-        println!(
+        info!("{}", "-".repeat(60));
+        info!("Component breakdown:");
+        info!(
             "  Jacobian assembly:         {:>9.3}ms  (avg: {:>9.3}ms)",
             total_jacobian.as_secs_f64() * 1000.0,
             total_jacobian.as_secs_f64() * 1000.0 / self.jacobian_times.len() as f64
         );
-        println!(
+        info!(
             "  Linear solve:              {:>9.3}s   (avg: {:>9.3}ms)",
             total_linear.as_secs_f64(),
             total_linear.as_secs_f64() * 1000.0 / self.linear_solve_times.len() as f64
         );
-        println!("{}", "=".repeat(60));
-        println!(
+        info!("{}", "=".repeat(60));
+        info!(
             "Overhead/Other:                {:>9.3}ms",
             overhead.as_secs_f64() * 1000.0
         );
-        println!(
-            "Iterations:                    {} jacobian, {} lin.solve\n",
+        info!(
+            "Iterations:                    {} jacobian, {} lin.solve",
             self.jacobian_times.len(),
             self.linear_solve_times.len()
         );
@@ -72,19 +73,19 @@ impl TimingStats {
             return;
         }
 
-        println!("\n{}", "=".repeat(39));
-        println!("{:^39}", "DETAILED ITERATION TIMINGS");
-        println!("{}", "=".repeat(39));
-        println!(
+        info!("{}", "=".repeat(39));
+        info!("{:^39}", "DETAILED ITERATION TIMINGS");
+        info!("{}", "=".repeat(39));
+        info!(
             "{:^6} | {:^10} | {:^7} | {:^7}",
             "Iter", "Jacobian", "Solve", "Total"
         );
-        println!("{}", "-".repeat(39));
+        info!("{}", "-".repeat(39));
 
         for i in 0..n {
             let iter_total = self.jacobian_times[i] + self.linear_solve_times[i];
 
-            println!(
+            info!(
                 "{:^6} | {:>8.1}ms | {:>5.1}ms | {:>5.1}ms",
                 i,
                 self.jacobian_times[i].as_secs_f64() * 1000.0,
@@ -95,7 +96,7 @@ impl TimingStats {
 
         // If there's an extra jacobian computation (convergence check), note it
         if self.jacobian_times.len() > n {
-            println!(
+            info!(
                 "{:^6} | {:>8.1}ms | {:>7} | {:>5.1}ms",
                 n,
                 self.jacobian_times[n].as_secs_f64() * 1000.0,
@@ -103,8 +104,6 @@ impl TimingStats {
                 self.jacobian_times[n].as_secs_f64() * 1000.0
             );
         }
-
-        println!();
     }
 
     #[cfg(not(feature = "timing"))]

@@ -1,19 +1,28 @@
 /// The complete computational grid.
+#[derive(Clone)]
 pub struct Mesh {
     pub cells: Vec<Cell>,
     pub faces: Vec<Face>,
     pub nodes: Vec<Node>,
+    /// Stores all face indices for cells in a single contiguous array.
+    /// Use `cell.face_start..cell.face_end` to slice into this array.
+    pub cell_face_ids: Vec<usize>,
 }
 
 /// A single control volume (a Voronoi cell).
+#[derive(Clone)]
 pub struct Cell {
     pub id: usize,
     pub volume: f64,
     pub centroid: [f64; 3],
-    pub face_ids: Vec<usize>,
+    /// Start index in `Mesh.cell_face_ids`
+    pub face_start: usize,
+    /// End index in `Mesh.cell_face_ids`
+    pub face_end: usize,
 }
 
 /// An interface between two cells.
+#[derive(Clone)]
 pub struct Face {
     // pub id: usize,
     pub area: f64,
@@ -25,6 +34,7 @@ pub struct Face {
     pub centroid: [f64; 3],
 }
 
+#[derive(Clone)]
 pub struct Node {
     // pub id: usize,
     pub position: [f64; 3],

@@ -18,13 +18,20 @@ pub fn parse_voronoi(voronoi: &Voronoi, generators: &[DVec3]) -> Mesh {
     let mut cells = Vec::new();
     let mut faces = Vec::new();
     let mut nodes = Vec::new();
+    let mut cell_face_ids = Vec::new();
 
     for (cell_id, cell) in voronoi.cells().into_iter().enumerate() {
+        let current_faces = cell.face_indices(voronoi);
+        let face_start = cell_face_ids.len();
+        cell_face_ids.extend_from_slice(current_faces);
+        let face_end = cell_face_ids.len();
+
         cells.push(Cell {
             id: cell_id,
             volume: cell.volume(),
             centroid: cell.centroid().to_array(),
-            face_ids: cell.face_indices(voronoi).to_vec(),
+            face_start,
+            face_end,
         });
     }
 
@@ -47,6 +54,7 @@ pub fn parse_voronoi(voronoi: &Voronoi, generators: &[DVec3]) -> Mesh {
         cells,
         faces,
         nodes,
+        cell_face_ids,
     }
 }
 

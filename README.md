@@ -20,7 +20,7 @@ Where:
 * **$d_{kl}$** is the distance between the centroids of cell $k$ and cell $l$, calculated by the library.
 * **$f_{\text{user}}(\dots)$** is the user-provided `FluxFn` closure, which defines the physical behavior of the flux based on the left-state $u_k$ and right-state $u_l$.
 
-Boundary conditions are implemented using a **ghost cell** methodology. The library computes a "ghost" state outside the domain that enforces generalized (Robin) boundary conditions, which are then used as the "right-state" $u_l$ in the flux function for boundary faces.
+...bc method has changed, todo : quick paragraph explaining it.
 
 The resulting system of (nonlinear) algebraic equations is solved using an inexact Newton method with Armijo line search. The Jacobian matrix required by the solver is calculated using **automatic differentiation** (`num_dual`), which provides the exact derivatives of the user's `FluxFn` and `ReactionFn` functions.
 
@@ -34,9 +34,7 @@ The resulting system of (nonlinear) algebraic equations is solved using an inexa
 - Implement more flexible solver API with different preconditioners etc...
 - Implement better mesh generation, more functions to create different geometries. For a start, being able to create non-re ctangular domains would be nice.
 - Make and test a 3D example
-- Try to parallelize some stuff
 - Improve documentation
-
 
 ### Debug vs Release Builds
 Some correctness checks are only performed in debug builds:
@@ -70,4 +68,3 @@ To run the benchmarks (not recommended yet) :
 ![](assets/capacitor.svg)
 ![](assets/quantum_barrier.gif)
 ![](assets/pn.svg)
-

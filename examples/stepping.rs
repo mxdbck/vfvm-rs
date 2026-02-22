@@ -1,104 +1,104 @@
-use nalgebra::DVector;
-use vfvm_rs::numerics::sparse_aramijo::NewtonArmijoSolver;
-use std::fs;
-use vfvm_rs::models::pn::pn::PnJunctionModel;
-use vfvm_rs::numerics::sparse::SparseNewtonSolver;
-use vfvm_rs::physics::PhysicsModel;
+use log::{error, info};
+use std::path::PathBuf;
+use vfvm_rs::models::pn::pn::{PnJunctionModel, create_pn_bc_registry, create_pn_initial_condition, tag_pn_boundary_faces};
 use vfvm_rs::processing::csv_writer;
+use vfvm_rs::system::{System, InitialCondition, Geometry, SolverConfig, OutputConfig};
 
 fn main() {
-    fs::create_dir_all("output/stepping").expect("Failed to create stepping output directory");
-
+    env_logger::init();
     let mesh_size = 1.0;
     let num_points = 500;
-    let logging = true;
 
-    let v_start = 0.0;
-    let v_end = 1.0;
-    let v_step = 0.1;
+    let v_start: f64 = 0.0;
+    let v_end: f64 = -1.0;
+    let v_step: f64 = -0.05;
 
-    println!("Voltage Stepping Simulation");
-    println!("============================");
-    println!("Start voltage: {:.3} V", v_start);
-    println!("End voltage: {:.3} V", v_end);
-    println!("Step size: {:.3} V", v_step);
-    println!();
+    info!("Voltage Stepping Simulation");
+    info!("============================");
+    info!("Start voltage: {:.3} V", v_start);
+    info!("End voltage: {:.3} V", v_end);
+    info!("Step size: {:.3} V", v_step);
 
-    let (mesh, params) = vfvm_rs::models::pn::pn::pn_problem_def(mesh_size, num_points, logging);
-    let (v_scale, ni_norm, n_scale) = (params.v_scale, params.ni_norm, params.n_scale);
+    let (mesh, params) = vfvm_rs::models::pn::pn::pn_problem_def(mesh_size, num_points);
 
-    let mut model = PnJunctionModel::new(params.clone(), 0.0, true).with_mesh(&mesh);
-
-    // let solver = SparseNewtonSolver {
-    //     tolerance: 1e-8,
-    //     max_iterations: 10000,
-    // };
-
-    let solver = NewtonArmijoSolver::default();
+    let mut solver_config = SolverConfig::default();
+    solver_config.max_step = Some(2.0);
 
     // Start with initial guess at equilibrium
-    let mut current_solution = model.initial_condition(&mesh);
-
-    save_step_solution(
-        &mesh,
-        &current_solution,
-        0,
-        v_start,
-        v_scale,
-        ni_norm,
-        n_scale,
-    );
+    let mut current_solution = create_pn_initial_condition(&mesh, &params, 0.0);
 
     // Voltage stepping loop
     let num_steps = ((v_end - v_start) / v_step).round() as usize;
-    let mut voltage_log: Vec<(f64, usize, f64)> = vec![(v_start, 0, 0.0)];
+    let mut voltage_log: Vec<(f64, usize, f64)> = vec![];
 
     for step in 0..=num_steps {
         let voltage = v_start + step as f64 * v_step;
 
-        println!(
+        info!(
             "Step {}/{}: Solving at V = {:.3} V",
-            step, num_steps, voltage
+            step,
+            num_steps,
+            voltage
         );
 
-        // model.v_applied = voltage / v_scale;
-        model = PnJunctionModel::new(params.clone(), voltage, true).with_mesh(&mesh);
+        let mut model = PnJunctionModel::new(params.clone(), voltage).with_mesh(&mesh);
 
         // Update voltage and reconfigure boundary conditions
-        model.apply_boundary_conditions(&mesh, &mut vec![]);
+        let bc_registry = create_pn_bc_registry(&params, voltage);
+        tag_pn_boundary_faces(&mesh, &mut model.functional.face_tags);
 
-        // Solve using previous solution as initial guess
-        match solver.solve(&model.functional, &mesh, current_solution.clone(), true) {
+        // Recreate config because it's consumed
+        let step_config = SolverConfig {
+            tolerance: solver_config.tolerance,
+            max_iterations: solver_config.max_iterations,
+            preconditioner: solver_config.preconditioner,
+            history_handler: None,
+            min_step_size: solver_config.min_step_size,
+            armijo_param: solver_config.armijo_param,
+            max_step: solver_config.max_step,
+            forcing_term: solver_config.forcing_term,
+        };
+
+        let mut system = System::new(
+            model.functional,
+            Geometry { mesh: mesh.clone() },
+            step_config,
+            InitialCondition::Vector(current_solution.clone()),
+            bc_registry,
+        );
+
+        system.output_config = Some(OutputConfig {
+            dir: PathBuf::from("output/stepping"),
+            file_pattern: "ignored.csv".to_string(),
+            save_initial: false,
+            save_final: false,
+            save_transient_interval: None,
+        });
+
+        match system.solve() {
             Ok(result) => {
-                println!(
+                info!(
                     "  Converged in {} iterations, residual: {:.3e}",
-                    result.iterations, result.final_residual
+                    result.iterations,
+                    result.final_residual
                 );
 
-                current_solution = result.solution;
+                current_solution = result.solution.clone();
                 voltage_log.push((
                     voltage,
                     result.iterations.try_into().unwrap(),
                     result.final_residual,
                 ));
 
-                // Save solution for this step
-                // if step == num_steps {
-                if true {
-                    save_step_solution(
-                        &mesh,
-                        &current_solution,
-                        step,
-                        voltage,
-                        v_scale,
-                        ni_norm,
-                        n_scale,
-                    );
+                // Save
+                if let Some(cfg) = &mut system.output_config {
+                     cfg.file_pattern = format!("step_{:03}_V_{:.3}.csv", step, voltage);
                 }
+                system.save_snapshot(step, voltage, &result.solution).expect("Failed to save snapshot");
             }
             Err(e) => {
-                eprintln!("  Failed to converge: {}", e);
-                eprintln!("  Stopping voltage stepping.");
+                error!("  Failed to converge: {}", e);
+                error!("  Stopping voltage stepping.");
                 break;
             }
         }
@@ -106,51 +106,8 @@ fn main() {
 
     save_convergence_history(&voltage_log);
 
-    println!();
-    println!("Voltage stepping completed!");
-    println!("Results saved to output/stepping/");
-}
-
-fn save_step_solution(
-    mesh: &vfvm_rs::discretization::mesh::Mesh,
-    solution: &DVector<f64>,
-    step: usize,
-    voltage: f64,
-    v_scale: f64,
-    ni_norm: f64,
-    n_scale: f64,
-) {
-    let x_positions: Vec<f64> = mesh.nodes.iter().map(|n| n.position[0]).collect();
-
-    let mut psi: Vec<f64> = solution.iter().step_by(3).cloned().collect();
-    let phi_n: Vec<f64> = solution.iter().skip(1).step_by(3).cloned().collect();
-    let phi_p: Vec<f64> = solution.iter().skip(2).step_by(3).cloned().collect();
-
-    let n_e: Vec<f64> = psi
-        .iter()
-        .zip(&phi_n)
-        .map(|(psi, phi_n)| ni_norm * (psi - phi_n).exp() * n_scale)
-        .collect();
-
-    let p_h: Vec<f64> = psi
-        .iter()
-        .zip(&phi_p)
-        .map(|(psi, phi_p)| ni_norm * (phi_p - psi).exp() * n_scale)
-        .collect();
-
-    // Scale and shift potential
-    let shift = psi[0];
-    psi.iter_mut().for_each(|p| {
-        *p = (*p - shift) * v_scale;
-    });
-
-    let filename = format!("output/stepping/step_{:03}_V_{:.3}.csv", step, voltage);
-    csv_writer::write_csv(
-        &filename,
-        &["x", "psi", "phi_n", "phi_p", "n_e", "p_h"],
-        &[x_positions, psi, phi_n, phi_p, n_e, p_h],
-    )
-    .expect(&format!("Failed to write solution for step {}", step));
+    info!("Voltage stepping completed!");
+    info!("Results saved to output/stepping/");
 }
 
 fn save_convergence_history(voltage_log: &[(f64, usize, f64)]) {
@@ -165,5 +122,5 @@ fn save_convergence_history(voltage_log: &[(f64, usize, f64)]) {
     )
     .expect("Failed to write convergence history");
 
-    println!("Convergence history saved to output/stepping/convergence_history.csv");
+    info!("Convergence history saved to output/stepping/convergence_history.csv");
 }

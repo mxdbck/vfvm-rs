@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use num_dual::DualNum;
-
 /// Field identifier stored as a runtime string.
 #[derive(Clone, Debug)]
 pub struct Field(pub Arc<str>);
@@ -109,7 +107,7 @@ pub enum BoundarySelector {
     Predicate(Arc<dyn Fn(Point, Normal) -> bool + Send + Sync>),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirichletStyle {
     Strong,
     #[allow(unused)]
@@ -189,24 +187,3 @@ mod tests {
     }
 }
 
-#[inline]
-pub fn robin_ghost_val<T: DualNum<f64>>(
-    u_i: T,
-    alpha: f64,
-    beta: f64,
-    gamma: f64,
-    delta: f64,
-) -> T {
-    let two = T::from(2.0);
-    let alpha_t = T::from(alpha);
-    let beta_t = T::from(beta);
-    let gamma_t = T::from(gamma);
-    let delta_t = T::from(delta);
-    if beta == 0.0 {
-        two * (gamma_t / alpha_t) - u_i
-    } else {
-        let denom = alpha_t.clone() + beta_t.clone() / delta_t.clone();
-        let numer = two * gamma_t - (alpha_t.clone() - beta_t.clone() / delta_t.clone()) * u_i;
-        numer / denom
-    }
-}

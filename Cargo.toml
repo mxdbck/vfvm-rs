@@ -7,20 +7,18 @@ edition = "2024"
 # Version of glam used by meshless_voronoi
 glam = "0.27"
 meshless_voronoi = "0.7.2"
-nalgebra = "0.33.0"
-num-dual = "0.11.2"
-num-traits = "0.2"
-plotters = "0.3.7"
+nalgebra = "0.34.0"
+num-dual = "0.13.4"
 thiserror = "2.0.16"
 sprs = "0.11.3"
-kryst = { version = "2.4.0", default-features = false, features = ["rayon", "logging"] }
+kryst = { version = "3.2.1" }
+rayon = "1.10"
+log = "0.4.29"
+env_logger = "0.11.9"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
-
-[[bench]]
-name = "benchmarks"
-harness = false
+# [[bench]]
+# name = "benchmarks"
+# harness = false
 
 [features]
 timing = []

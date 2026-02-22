@@ -26,7 +26,7 @@ fn main() {
     }
 
     let xy = DVector::from(init_vec);
-    let (f, jac) = jacobian(|arg| m_to_n(m, n, arg), xy);
+    let (f, jac) = jacobian(|arg| m_to_n(m, n, arg), &xy);
     print!("{}\n", f);
     print!("{}\n", jac);
 }

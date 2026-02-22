@@ -1,15 +1,15 @@
 // examples/particle.rs
 use glam::DVec3;
+use log::info;
 use nalgebra::DVector;
 use num_dual::DualDVec64;
-use std::fs;
+use std::path::PathBuf;
 
 use vfvm_rs::discretization::generator::create_voronoi_mesh;
 use vfvm_rs::discretization::mesh::{Cell, Face};
-use vfvm_rs::numerics::transient::TransientSolver;
-use vfvm_rs::physics::bc::Field;
+use vfvm_rs::physics::bc::{Field, BCRegistry};
 use vfvm_rs::physics::functional::FunctionalPhysics;
-use vfvm_rs::processing::csv_writer;
+use vfvm_rs::system::{System, InitialCondition, Geometry, SolverConfig, TransientConfig, OutputConfig};
 
 // Scaling Constants
 const L_SCALE: f64 = 1.0e-9;          // Length scale: 1 nm
@@ -28,7 +28,7 @@ pub struct SchrodingerParams {
 
 pub fn setup_schrodinger_physics(
     params: SchrodingerParams,
-) -> FunctionalPhysics<DualDVec64, SchrodingerParams> {
+) -> FunctionalPhysics<SchrodingerParams> {
     let reaction = Box::new(
         |f: &mut [DualDVec64], u: &[DualDVec64], cell: &Cell, data: &SchrodingerParams| {
             let (psi_r, psi_i) = (&u[0], &u[1]);
@@ -64,8 +64,8 @@ pub fn setup_schrodinger_physics(
 }
 
 fn main() {
-    fs::create_dir_all("output/quantum").expect("Failed to create output directory");
-
+    env_logger::init();
+    // --- Geometry ---
     let width_sim = [200.0, 100.0, 1.0];
     let (nx, ny) = (200, 100);
 
@@ -98,6 +98,7 @@ fn main() {
         }
     }).collect();
 
+    // --- Initial Condition ---
     let k0_si = 1.5e9;
     let k_sim = k0_si * L_SCALE;
 
@@ -117,6 +118,7 @@ fn main() {
     }
     let u_init = DVector::from_vec(init_vals);
 
+    // --- Physics ---
     // Effective Diffusion Coeff D_eff = hbar^2 / (2 * m * L^2 * E)
     let d_eff = (HBAR_SI.powi(2)) / (2.0 * MASS_SI * L_SCALE.powi(2) * E_SCALE);
 
@@ -131,61 +133,48 @@ fn main() {
         potential: potential_sim
     };
 
-    let mut model = setup_schrodinger_physics(params);
+    let model = setup_schrodinger_physics(params);
 
+    // --- Solver ---
     let t_end_si = 1200.0e-15;
     let t_end_sim = t_end_si / T_SCALE;
 
     let dt_si = 4.0e-15; // Step size: 0.5 fs
     let dt_sim = dt_si / T_SCALE;
 
-    let solver = TransientSolver {
+    info!("Starting Quantum Simulation (Scaled)...");
+    info!("  L_scale: {:.2e} m", L_SCALE);
+    info!("  T_scale: {:.2e} s", T_SCALE);
+    info!("  D_eff:   {:.4}", d_eff);
+
+    let mut system = System::new(
+        model,
+        Geometry { mesh },
+        SolverConfig {
+            tolerance: 1e-6,
+            ..SolverConfig::default()
+        },
+        InitialCondition::Vector(u_init),
+        BCRegistry::default(),
+    );
+
+    system.length_scale = L_SCALE;
+
+    system.transient_config = Some(TransientConfig {
         t_start: 0.0,
         t_end: t_end_sim,
         dt: dt_sim,
-        tolerance: 1e-6,
         theta: 0.5,
-    };
-
-    println!("Starting Quantum Simulation (Scaled)...");
-    println!("  L_scale: {:.2e} m", L_SCALE);
-    println!("  T_scale: {:.2e} s", T_SCALE);
-    println!("  D_eff:   {:.4}", d_eff);
-
-    let mut frame_idx = 0;
-    save_frame(frame_idx, 0.0, &u_init, &x_sim, &y_sim);
-
-    solver.solve(&mut model, &mesh, u_init, |t_sim, u| {
-        let t_fs = t_sim * T_SCALE * 1e15;
-        let step = (t_sim / dt_sim).round() as u32;
-
-        if step % 4 == 0 { // Save every 4 steps
-            frame_idx += 1;
-            save_frame(frame_idx, t_fs, u, &x_sim, &y_sim);
-        }
+        step_handler: None,
     });
-}
 
-fn save_frame(idx: u32, t_fs: f64, u: &DVector<f64>, x_sim: &[f64], y_sim: &[f64]) {
-    // Convert positions back to meters for plotting consistency
-    let x_phys: Vec<f64> = x_sim.iter().map(|&x| x * L_SCALE).collect();
-    let y_phys: Vec<f64> = y_sim.iter().map(|&y| y * L_SCALE).collect();
+    system.output_config = Some(OutputConfig {
+        dir: PathBuf::from("output/quantum"),
+        file_pattern: "wave_{}.csv".to_string(),
+        save_initial: true,
+        save_final: true,
+        save_transient_interval: Some(4),
+    });
 
-    let density: Vec<f64> = u
-        .iter()
-        .step_by(2)
-        .zip(u.iter().skip(1).step_by(2))
-        .map(|(r, i)| r * r + i * i)
-        .collect();
-
-    let filename = format!("output/quantum/wave_{:05}fs.csv", idx);
-
-    csv_writer::write_csv(
-        &filename,
-        &["x", "y", "density"],
-        &[x_phys, y_phys, density],
-    )
-    .expect("Failed to write output");
-
-    println!("Saved frame {} at {:.2} fs", idx, t_fs);
+    system.solve().expect("Transient simulation failed");
 }

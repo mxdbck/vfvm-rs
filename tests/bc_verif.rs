@@ -1,19 +1,22 @@
+use std::u32;
+
 use glam::DVec3;
 use nalgebra::DVector;
 use num_dual::DualDVec64;
 
 use vfvm_rs::discretization::generator::create_voronoi_mesh;
 use vfvm_rs::discretization::mesh::{Cell, Face, Mesh};
-use vfvm_rs::numerics::sparse_aramijo::NewtonArmijoSolver;
-use vfvm_rs::numerics::Tolerance;
-use vfvm_rs::physics::bc::{BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
+use vfvm_rs::discretization::fvm::FvmDiscretizer;
+use vfvm_rs::numerics::nonlinear::NonlinearSolver;
+use vfvm_rs::physics::bc::{BCRegistry, BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
 use vfvm_rs::physics::functional::FunctionalPhysics;
-use vfvm_rs::physics::PhysicsModel;
+use vfvm_rs::system::SolverConfig;
+use vfvm_rs::system::Preconditioner;
 
 #[derive(Clone)]
 struct LinearParams;
 
-fn setup_linear(params: LinearParams) -> FunctionalPhysics<DualDVec64, LinearParams> {
+fn setup_linear(params: LinearParams) -> FunctionalPhysics<LinearParams> {
     let flux = Box::new(
         |f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _face: &Face, _: &LinearParams| {
             f[0] = u_k[0].clone() - u_l[0].clone();
@@ -25,21 +28,23 @@ fn setup_linear(params: LinearParams) -> FunctionalPhysics<DualDVec64, LinearPar
 }
 
 struct TestModel<D: Clone + 'static> {
-    physics: FunctionalPhysics<DualDVec64, D>,
+    physics: FunctionalPhysics<D>,
 }
-impl<D: Clone + 'static> PhysicsModel<DualDVec64> for TestModel<D> {
+impl<D: Clone + 'static> PhysicsModel for TestModel<D> {
     fn num_variables(&self) -> usize { self.physics.num_vars_per_cell }
-    fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
-        self.physics.calculate_residual(mesh, u)
+    fn calculate_residual(&mut self, mesh: &Mesh, bc: &BCRegistry, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
+        let discretizer = FvmDiscretizer::new(&mut self.physics, mesh, bc);
+        discretizer.calculate_residual(u)
     }
-    fn apply_boundary_conditions(&mut self, _: &Mesh, _: &mut Vec<f64>) {}
 }
 
 fn setup_1d_mesh(width: f64, num_points: usize) -> (Mesh, usize, usize) {
     let dx = width / num_points as f64;
     let mut generators = Vec::new();
-    for i in (-(num_points as i32) / 2)..=((num_points as i32) / 2) {
-        let x = (i as f64) * dx;
+    // Shift points to cell centers to avoid placing generators on the boundary
+    let start = -(width / 2.0) + dx / 2.0;
+    for i in 0..num_points {
+        let x = start + (i as f64) * dx;
         generators.push(DVec3::new(x, 0.0, 0.0));
     }
     let mesh = create_voronoi_mesh(&generators, [width, 0.1, 0.1]);
@@ -64,21 +69,33 @@ fn verify_neumann() {
     model.physics.face_tags.insert(left_face, "left".to_string());
     model.physics.face_tags.insert(right_face, "right".to_string());
 
-    model.physics.bc_registry.add(BCRule {
+    let mut bc_registry = BCRegistry::default();
+    bc_registry.add(BCRule {
         field: Field::from("u"), on: BoundarySelector::Label("left".to_string()),
         bc: GeneralizedBC::dirichlet(0.0), style: DirichletStyle::Strong,
     });
 
     // Right: Neumann (Flux) = 5.0 => du/dx = 5.0
-    model.physics.bc_registry.add(BCRule {
+    bc_registry.add(BCRule {
         field: Field::from("u"), on: BoundarySelector::Label("right".to_string()),
         bc: GeneralizedBC::neumann(q_flux), style: DirichletStyle::Strong,
     });
 
-    let mut solver = NewtonArmijoSolver::default();
-    solver.convergence.tolerance = Tolerance::Absolute(1e-8);
+    let config = SolverConfig {
+        tolerance: 1e-12,
+        max_iterations: 100,
+        preconditioner: Preconditioner::None,
+        history_handler: None,
+        min_step_size: 1e-6,
+        armijo_param: 1e-4,
+        max_step: None,
+        forcing_term: 1e-3,
+    };
+    let mut solver = NonlinearSolver::new(config);
     let init = DVector::zeros(mesh.cells.len());
-    let result = solver.solve(&model.physics, &mesh, init, false).expect("Solved");
+    let discretizer = FvmDiscretizer::new(&mut model.physics, &mesh, &bc_registry);
+
+    let result = solver.solve(&discretizer, init).expect("Solved");
 
     let mut max_err = 0.0;
     for (i, val) in result.solution.iter().enumerate() {
@@ -117,20 +134,32 @@ fn verify_robin() {
     model.physics.face_tags.insert(left_face, "left".to_string());
     model.physics.face_tags.insert(right_face, "right".to_string());
 
-    model.physics.bc_registry.add(BCRule {
+    let mut bc_registry = BCRegistry::default();
+    bc_registry.add(BCRule {
         field: Field::from("u"), on: BoundarySelector::Label("left".to_string()),
         bc: GeneralizedBC::dirichlet(10.0), style: DirichletStyle::Strong,
     });
 
-    model.physics.bc_registry.add(BCRule {
+    bc_registry.add(BCRule {
         field: Field::from("u"), on: BoundarySelector::Label("right".to_string()),
         bc: GeneralizedBC::robin(h_coeff, 0.0), style: DirichletStyle::Strong,
     });
 
-    let mut solver = NewtonArmijoSolver::default();
-    solver.convergence.tolerance = Tolerance::Absolute(1e-8);
+    let config = SolverConfig {
+        tolerance: 1e-12,
+        max_iterations: 100,
+        preconditioner: Preconditioner::None,
+        history_handler: None,
+        min_step_size: 1e-6,
+        armijo_param: 1e-4,
+        max_step: None,
+        forcing_term: 0.1,
+    };
+    let mut solver = NonlinearSolver::new(config);
     let init = DVector::from_element(mesh.cells.len(), 5.0);
-    let result = solver.solve(&model.physics, &mesh, init, false).expect("Solved");
+    let discretizer = FvmDiscretizer::new(&mut model.physics, &mesh, &bc_registry);
+
+    let result = solver.solve(&discretizer, init).expect("Solved");
 
     let mut max_err = 0.0;
     for (i, val) in result.solution.iter().enumerate() {

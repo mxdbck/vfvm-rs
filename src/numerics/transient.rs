@@ -1,9 +1,8 @@
-use crate::discretization::mesh::Mesh;
-use crate::numerics::sparse_aramijo::NewtonArmijoSolver;
-use crate::numerics::Tolerance;
-use crate::physics::functional::FunctionalPhysics;
+use crate::discretization::fvm::FvmDiscretizer;
+use crate::numerics::nonlinear::{NonlinearSolver, SolverResult};
+use crate::system::{Preconditioner, SolverConfig, SystemError};
+use log::{error, info};
 use nalgebra::DVector;
-use num_dual::DualDVec64;
 
 pub struct TransientSolver {
     pub t_start: f64,
@@ -28,61 +27,88 @@ impl Default for TransientSolver {
 impl TransientSolver {
     pub fn solve<F>(
         &self,
-        model: &mut FunctionalPhysics<DualDVec64, F>,
-        mesh: &Mesh,
+        discretizer: &mut FvmDiscretizer<F>,
         initial_condition: DVector<f64>,
-        mut callback: impl FnMut(f64, &DVector<f64>),
-    ) where
-        F: 'static + Clone,
+        mut callback: impl FnMut(usize, f64, &DVector<f64>),
+    ) -> Result<SolverResult, SystemError>
+    where
+        F: 'static + Clone + Sync,
     {
-        model.theta = self.theta;
-
+        discretizer.theta = self.theta;
 
         let mut u = initial_condition;
         let mut t = self.t_start;
         let mut dt = self.dt;
 
-        let mut solver = NewtonArmijoSolver::default();
-        solver.convergence.tolerance = Tolerance::Combined(self.tolerance, 1e-9);
+        let config = SolverConfig {
+            tolerance: self.tolerance,
+            max_iterations: 50,
+            preconditioner: Preconditioner::None,
+            history_handler: None,
+            min_step_size: 1e-6,
+            armijo_param: 1e-4,
+            max_step: None,
+            forcing_term: 0.1,
+        };
 
-        // Initialize history in functional
-        model.prepare_time_step(mesh, u.clone(), dt);
+        let mut solver = NonlinearSolver::new(config);
 
-        println!(
+        // Initialize history in discretizer
+        discretizer.prepare_time_step(u.clone(), dt);
+
+        info!(
             "Starting Transient Simulation: T={:.2} -> {:.2}",
-            self.t_start, self.t_end
+            self.t_start,
+            self.t_end
         );
 
         let mut step = 0;
+        let mut last_result: Option<SolverResult> = None;
+        let start_time = std::time::Instant::now();
+
         while t < self.t_end {
             step += 1;
 
-            model.prepare_time_step(mesh, u.clone(), dt);
-            model.current_time = Some(t + dt);
+            discretizer.prepare_time_step(u.clone(), dt);
+            discretizer.model.current_time = Some(t + dt);
 
-            match solver.solve(model, mesh, u.clone(), false) {
+            match solver.solve(discretizer, u.clone()) {
                 Ok(result) => {
-                    // Accept step
                     t += dt;
-                    u = result.solution;
-                    // dt *= 1.2; // Simple timestep increase on success
-
-                    println!(
+                    u = result.solution.clone();
+                    info!(
                         "Step {:>4} | t = {:.4e} | dt = {:.3e} | iters = {}",
-                        step, t, dt, result.iterations
+                        step,
+                        t,
+                        dt,
+                        result.iterations
                     );
-
-                    // User callback (e.g., writing to file)
-                    callback(t, &u);
+                    callback(step, t, &u);
+                    last_result = Some(result);
                 }
                 Err(e) => {
-                    println!(
+                    error!(
                         "Step {:>4} | t = {:.4e} | dt = {:.3e} | FAILED: {}",
-                        step, t, dt, e
+                        step,
+                        t,
+                        dt,
+                        e
                     );
-                    dt *= 0.5; // Simple timestep reduction on failure
+                    dt *= 0.5;
+                    // If dt becomes too small, return error
+                    if dt < 1e-15 {
+                         return Err(SystemError::SimulationFailed(format!("Step failed: {}", e)));
+                    }
                 }
             }
         }
+
+        last_result
+            .map(|mut res| {
+                res.solve_time = start_time.elapsed();
+                res.step_count = step;
+                res
+            })
+            .ok_or_else(|| SystemError::SimulationFailed("No steps completed".to_string()))
     }
 }

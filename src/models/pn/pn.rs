@@ -1,12 +1,12 @@
 use super::semiconductor::setup_semiconductor_physics;
 use crate::discretization::generator::create_voronoi_mesh;
 use crate::discretization::mesh::Mesh;
-use crate::physics::PhysicsModel;
-use crate::physics::bc::{BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
+use crate::physics::bc::{BCRegistry, BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
 use crate::physics::functional::FunctionalPhysics;
 use glam::DVec3;
+use log::info;
 use nalgebra::DVector;
-use num_dual::DualDVec64;
+use std::collections::HashMap;
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
@@ -32,7 +32,6 @@ pub struct PnJunctionParams {
 pub fn pn_problem_def(
     power_scale: f64,
     num_points: u32,
-    logging: bool,
 ) -> (Mesh, PnJunctionParams) {
     // Physical parameters in cm-based units
     let ni_val = 1e10; // [cm^-3] Intrinsic carrier concentration
@@ -51,14 +50,12 @@ pub fn pn_problem_def(
     let d_scale = 35.0; // Max diffusion coeff [cm^2/s]
     let time_scale = l_scale.powi(2) / d_scale;
 
-    if logging {
-        println!("--- Scaling Constants ---");
-        println!("Potential Scale (V_T): {:.4} V", v_scale);
-        println!("Concentration Scale (N_max): {:.2e} cm^-3", n_scale);
-        println!("Length Scale (L_D): {:.4e} cm", l_scale);
-        println!("Time Scale: {:.4e} s", time_scale);
-        println!("-------------------------\n");
-    }
+    info!("--- Scaling Constants ---");
+    info!("Potential Scale (V_T): {:.4} V", v_scale);
+    info!("Concentration Scale (N_max): {:.2e} cm^-3", n_scale);
+    info!("Length Scale (L_D): {:.4e} cm", l_scale);
+    info!("Time Scale: {:.4e} s", time_scale);
+    info!("-------------------------");
 
     // Domain definition for a 1D PN junction
     let domain_width = 1.0e-4; // [cm]
@@ -130,20 +127,16 @@ pub fn pn_problem_def(
 
 /// A complete PN junction model that implements PhysicsModel.
 pub struct PnJunctionModel {
-    pub functional: FunctionalPhysics<DualDVec64, PnJunctionParams>,
+    pub functional: FunctionalPhysics<PnJunctionParams>,
     pub v_applied: f64, // Applied voltage in physical units (V)
-    pub logging: bool,
-    pub(crate) bcs_configured: bool,
 }
 
 impl PnJunctionModel {
-    pub fn new(params: PnJunctionParams, v_applied: f64, logging: bool) -> Self {
+    pub fn new(params: PnJunctionParams, v_applied: f64) -> Self {
         let functional = setup_semiconductor_physics(params);
         Self {
             functional,
             v_applied,
-            logging,
-            bcs_configured: false,
         }
     }
 
@@ -164,163 +157,146 @@ fn calculate_equilibrium_psi(c: f64, ni: f64) -> f64 {
     x.ln()
 }
 
-impl PhysicsModel<DualDVec64> for PnJunctionModel {
-    fn num_variables(&self) -> usize {
-        self.functional.num_vars_per_cell
+pub fn create_pn_initial_condition(mesh: &Mesh, params: &PnJunctionParams, v_applied: f64) -> DVector<f64> {
+    let num_vars = 3; // Hardcoded for PN junction
+    let v_app_norm = v_applied / params.v_scale;
+
+    // Equilibrium potentials from charge neutrality
+    let psi_l_eq = calculate_equilibrium_psi(-params.na_norm, params.ni_norm);
+    let psi_r_eq = calculate_equilibrium_psi(params.nd_norm, params.ni_norm);
+
+    info!("Initial Condition:");
+    info!("  Left equilibrium potential: {}", psi_l_eq);
+    info!("  Right equilibrium potential: {}", psi_r_eq);
+    info!("  Applied voltage (normalized): {}", v_app_norm);
+
+    // Boundary values
+    let psi_left = psi_l_eq + v_app_norm;
+    let psi_right = psi_r_eq;
+    let phi_left = v_app_norm;
+    let phi_right = 0.0;
+
+    // Get mesh bounds for interpolation
+    let x_min = mesh
+        .nodes
+        .iter()
+        .map(|n| n.position[0])
+        .reduce(f64::min)
+        .unwrap();
+    let x_max = mesh
+        .nodes
+        .iter()
+        .map(|n| n.position[0])
+        .reduce(f64::max)
+        .unwrap();
+    let width = if x_max > x_min { x_max - x_min } else { 1.0 };
+
+    // Create linear initial guess across nodes
+    let n_nodes = mesh.nodes.len();
+    let mut init = Vec::with_capacity(num_vars * n_nodes);
+
+    for i in 0..n_nodes {
+        let node_x = mesh.nodes[i].position[0];
+        let t = (node_x / width) + 0.5;
+
+        let psi_i = (1.0 - t) * psi_left + t * psi_right;
+        let phi_n_i = (1.0 - t) * phi_left + t * phi_right;
+        let phi_p_i = (1.0 - t) * phi_left + t * phi_right;
+
+        init.push(psi_i);
+        init.push(phi_n_i);
+        init.push(phi_p_i);
     }
 
-    fn calculate_residual(&self, mesh: &Mesh, u: DVector<DualDVec64>) -> DVector<DualDVec64> {
-        self.functional.calculate_residual(mesh, u)
-    }
+    DVector::from_vec(init)
+}
 
-    fn initial_condition(&self, mesh: &Mesh) -> DVector<f64> {
-        let num_vars = self.num_variables();
-        let params = &self.functional.data;
+pub fn create_pn_bc_registry(params: &PnJunctionParams, v_applied: f64) -> BCRegistry {
+    let mut bc_registry = BCRegistry::default();
 
-        let v_app_norm = self.v_applied / params.v_scale;
+    let v_app_norm = v_applied / params.v_scale;
 
-        // Equilibrium potentials from charge neutrality
-        let psi_l_eq = calculate_equilibrium_psi(-params.na_norm, params.ni_norm);
-        let psi_r_eq = calculate_equilibrium_psi(params.nd_norm, params.ni_norm);
+    // Equilibrium potentials
+    let psi_l_eq = calculate_equilibrium_psi(-params.na_norm, params.ni_norm);
+    let psi_r_eq = calculate_equilibrium_psi(params.nd_norm, params.ni_norm);
 
-        if self.logging {
-            println!("Initial Condition:");
-            println!("  Left equilibrium potential: {}", psi_l_eq);
-            println!("  Right equilibrium potential: {}", psi_r_eq);
-            println!("  Applied voltage (normalized): {}\n", v_app_norm);
-        }
+    info!("Configuring Boundary Conditions:");
+    info!(
+        "  Left contact: psi={}, phi_n={}, phi_p={}",
+        psi_l_eq + v_app_norm,
+        v_app_norm,
+        v_app_norm
+    );
+    info!("  Right contact: psi={}, phi_n=0, phi_p=0", psi_r_eq);
 
-        // Boundary values
-        let psi_left = psi_l_eq + v_app_norm;
-        let psi_right = psi_r_eq;
-        let phi_left = v_app_norm;
-        let phi_right = 0.0;
+    // Register left contact BCs
+    bc_registry.add(BCRule {
+        field: Field::from("psi"),
+        on: BoundarySelector::Label("left_contact".into()),
+        bc: GeneralizedBC::dirichlet(psi_l_eq + v_app_norm),
+        style: DirichletStyle::Strong,
+    });
+    bc_registry.add(BCRule {
+        field: Field::from("phi_n"),
+        on: BoundarySelector::Label("left_contact".into()),
+        bc: GeneralizedBC::dirichlet(v_app_norm),
+        style: DirichletStyle::Strong,
+    });
+    bc_registry.add(BCRule {
+        field: Field::from("phi_p"),
+        on: BoundarySelector::Label("left_contact".into()),
+        bc: GeneralizedBC::dirichlet(v_app_norm),
+        style: DirichletStyle::Strong,
+    });
 
-        // Get mesh bounds for interpolation
-        let x_min = mesh
-            .nodes
-            .iter()
-            .map(|n| n.position[0])
-            .reduce(f64::min)
-            .unwrap();
-        let x_max = mesh
-            .nodes
-            .iter()
-            .map(|n| n.position[0])
-            .reduce(f64::max)
-            .unwrap();
-        let width = if x_max > x_min { x_max - x_min } else { 1.0 };
+    // Register right contact BCs
+    bc_registry.add(BCRule {
+        field: Field::from("psi"),
+        on: BoundarySelector::Label("right_contact".into()),
+        bc: GeneralizedBC::dirichlet(psi_r_eq),
+        style: DirichletStyle::Strong,
+    });
+    bc_registry.add(BCRule {
+        field: Field::from("phi_n"),
+        on: BoundarySelector::Label("right_contact".into()),
+        bc: GeneralizedBC::dirichlet(0.0),
+        style: DirichletStyle::Strong,
+    });
+    bc_registry.add(BCRule {
+        field: Field::from("phi_p"),
+        on: BoundarySelector::Label("right_contact".into()),
+        bc: GeneralizedBC::dirichlet(0.0),
+        style: DirichletStyle::Strong,
+    });
 
-        // Create linear initial guess across nodes
-        let n_nodes = mesh.nodes.len();
-        let mut init = Vec::with_capacity(num_vars * n_nodes);
+    bc_registry
+}
 
-        for i in 0..n_nodes {
-            let node_x = mesh.nodes[i].position[0];
-            let t = (node_x / width) + 0.5;
+pub fn tag_pn_boundary_faces(mesh: &Mesh, face_tags: &mut HashMap<usize, String>) {
+    // Identify and tag boundary faces
+    let mut id_left = 0;
+    let mut id_right = 0;
 
-            let psi_i = (1.0 - t) * psi_left + t * psi_right;
-            let phi_n_i = (1.0 - t) * phi_left + t * phi_right;
-            let phi_p_i = (1.0 - t) * phi_left + t * phi_right;
-
-            init.push(psi_i);
-            init.push(phi_n_i);
-            init.push(phi_p_i);
-        }
-
-        DVector::from_vec(init)
-    }
-
-    fn apply_boundary_conditions(&mut self, mesh: &Mesh, _u: &mut Vec<f64>) {
-        let phys = &mut self.functional;
-        let params = &phys.data;
-
-        let v_app_norm = self.v_applied / params.v_scale;
-
-        // Equilibrium potentials
-        let psi_l_eq = calculate_equilibrium_psi(-params.na_norm, params.ni_norm);
-        let psi_r_eq = calculate_equilibrium_psi(params.nd_norm, params.ni_norm);
-
-        if self.logging {
-            println!("Configuring Boundary Conditions:");
-            println!(
-                "  Left contact: psi={}, phi_n={}, phi_p={}",
-                psi_l_eq + v_app_norm,
-                v_app_norm,
-                v_app_norm
-            );
-            println!("  Right contact: psi={}, phi_n=0, phi_p=0\n", psi_r_eq);
-        }
-
-        // Register left contact BCs
-        phys.bc_registry.add(BCRule {
-            field: Field::from("psi"),
-            on: BoundarySelector::Label("left_contact".into()),
-            bc: GeneralizedBC::dirichlet(psi_l_eq + v_app_norm),
-            style: DirichletStyle::Strong,
-        });
-        phys.bc_registry.add(BCRule {
-            field: Field::from("phi_n"),
-            on: BoundarySelector::Label("left_contact".into()),
-            bc: GeneralizedBC::dirichlet(v_app_norm),
-            style: DirichletStyle::Strong,
-        });
-        phys.bc_registry.add(BCRule {
-            field: Field::from("phi_p"),
-            on: BoundarySelector::Label("left_contact".into()),
-            bc: GeneralizedBC::dirichlet(v_app_norm),
-            style: DirichletStyle::Strong,
-        });
-
-        // Register right contact BCs
-        phys.bc_registry.add(BCRule {
-            field: Field::from("psi"),
-            on: BoundarySelector::Label("right_contact".into()),
-            bc: GeneralizedBC::dirichlet(psi_r_eq),
-            style: DirichletStyle::Strong,
-        });
-        phys.bc_registry.add(BCRule {
-            field: Field::from("phi_n"),
-            on: BoundarySelector::Label("right_contact".into()),
-            bc: GeneralizedBC::dirichlet(0.0),
-            style: DirichletStyle::Strong,
-        });
-        phys.bc_registry.add(BCRule {
-            field: Field::from("phi_p"),
-            on: BoundarySelector::Label("right_contact".into()),
-            bc: GeneralizedBC::dirichlet(0.0),
-            style: DirichletStyle::Strong,
-        });
-
-        // Identify and tag boundary faces
-        let mut id_left = 0;
-        let mut id_right = 0;
-
-        for (i, face) in mesh.faces.iter().enumerate() {
-            if face.neighbor_cell_ids.1.is_none() {
-                if face.normal[0] > 0.0 {
-                    if self.logging {
-                        println!(
-                            "Left boundary face: {:?}, normal: {:?}",
-                            face.centroid, face.normal
-                        );
-                    }
-                    id_left = i;
-                } else if face.normal[0] < 0.0 {
-                    if self.logging {
-                        println!(
-                            "Right boundary face: {:?}, normal: {:?}\n",
-                            face.centroid, face.normal
-                        );
-                    }
-                    id_right = i;
-                }
+    for (i, face) in mesh.faces.iter().enumerate() {
+        if face.neighbor_cell_ids.1.is_none() {
+            if face.normal[0] > 0.0 {
+                info!(
+                    "Left boundary face: {:?}, normal: {:?}",
+                    face.centroid,
+                    face.normal
+                );
+                id_left = i;
+            } else if face.normal[0] < 0.0 {
+                info!(
+                    "Right boundary face: {:?}, normal: {:?}",
+                    face.centroid,
+                    face.normal
+                );
+                id_right = i;
             }
         }
-
-        phys.face_tags.insert(id_left, "left_contact".into());
-        phys.face_tags.insert(id_right, "right_contact".into());
-
-        self.bcs_configured = true;
     }
+
+    face_tags.insert(id_left, "left_contact".into());
+    face_tags.insert(id_right, "right_contact".into());
 }

@@ -1,27 +1,30 @@
-pub mod solver;
-pub mod sparse;
-pub mod sparse_aramijo;
+pub mod nonlinear;
 pub mod timing;
 pub mod transient;
 
-pub enum Tolerance{
+use nalgebra::DVector;
+
+#[derive(Debug, Clone, Copy)]
+pub enum Tolerance {
     Absolute(f64),
     Relative(f64),
     Combined(f64, f64),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ConvergenceMetric {
-    L2Norm,
     MaxNorm,
+    L2Norm,
 }
 
-/// Convergence criteria for iterative solvers
+#[derive(Debug, Clone, Copy)]
 pub enum ConvergenceCriteria {
     Residual,
     Update,
     Both,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Convergence {
     pub criteria: ConvergenceCriteria,
     pub tolerance: Tolerance,
@@ -29,31 +32,39 @@ pub struct Convergence {
 }
 
 impl Convergence {
-    pub fn norm(&self, vector: &nalgebra::DVector<f64>) -> f64 {
+    pub fn norm(&self, v: &DVector<f64>) -> f64 {
         match self.metric {
-            ConvergenceMetric::L2Norm => vector.norm(),
-            ConvergenceMetric::MaxNorm => vector.amax(),
+            ConvergenceMetric::MaxNorm => v.amax(),
+            ConvergenceMetric::L2Norm => v.norm(),
         }
     }
 
-    pub fn check_tolerance(&self, norm: f64, initial_norm: f64) -> bool {
-        match self.tolerance {
-            Tolerance::Absolute(tol) => norm < tol,
-            Tolerance::Relative(tol) => norm / initial_norm < tol,
-            Tolerance::Combined(abs_tol, rel_tol) => {
-                norm < abs_tol || (norm / initial_norm) < rel_tol
-            }
-        }
-    }
+    pub fn check_convergence(
+        &self,
+        residual: &DVector<f64>,
+        update: &DVector<f64>,
+        initial_residual: f64,
+        initial_update: f64,
+    ) -> bool {
+        let res_norm = self.norm(residual);
+        let upd_norm = self.norm(update);
 
-    pub fn check_convergence(&self, residual: &nalgebra::DVector<f64>, update: &nalgebra::DVector<f64>, initial_residual_norm: f64, initial_update_norm: f64) -> bool {
+        let res_converged = match self.tolerance {
+            Tolerance::Absolute(tol) => res_norm < tol,
+            Tolerance::Relative(tol) => res_norm < tol * initial_residual,
+            Tolerance::Combined(atol, rtol) => res_norm < atol + rtol * initial_residual,
+        };
+
+        let upd_converged = match self.tolerance {
+            Tolerance::Absolute(tol) => upd_norm < tol,
+            Tolerance::Relative(tol) => upd_norm < tol * initial_update,
+            Tolerance::Combined(atol, rtol) => upd_norm < atol + rtol * initial_update,
+        };
+
         match self.criteria {
-            ConvergenceCriteria::Residual => self.check_tolerance(self.norm(residual), initial_residual_norm),
-            ConvergenceCriteria::Update => self.check_tolerance(self.norm(update), initial_update_norm),
-            ConvergenceCriteria::Both => {
-                self.check_tolerance(self.norm(residual), initial_residual_norm) &&
-                self.check_tolerance(self.norm(update), initial_update_norm)
-            }
+            ConvergenceCriteria::Residual => res_converged,
+            ConvergenceCriteria::Update => upd_converged,
+            ConvergenceCriteria::Both => res_converged && upd_converged,
         }
     }
 }

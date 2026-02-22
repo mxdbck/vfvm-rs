@@ -4,3 +4,4 @@ output/
 .DS_Store
 src/physics/semiconductor-fut.rs
 TODO.md
+backup/
