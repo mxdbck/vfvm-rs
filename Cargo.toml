@@ -27,3 +27,9 @@ timing = []
 [dependencies.libffi-sys]
 version = "2.3.0"
 features = ["system"]
+
+[profile.release]
+lto = "fat"           # Enable Link-Time Optimization (LTO)
+codegen-units = 1     # Optimize the whole crate at once
+panic = "abort"       # Remove panic unwinding overhead
+strip = true          # Strip symbols (minor binary size/cache win)

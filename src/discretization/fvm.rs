@@ -1,6 +1,6 @@
 use crate::discretization::mesh::Mesh;
 use crate::physics::bc::BCRegistry;
-use crate::physics::functional::{BoundaryAction, FunctionalPhysics};
+use crate::physics::functional::{BoundaryAction, FluxFn, FunctionalPhysics, ReactionFn, StorageFn};
 use crate::physics::DiscreteModel;
 use kryst::matrix::sparse::CsrMatrix;
 use nalgebra::{DVector, Dyn, U1};
@@ -12,8 +12,8 @@ pub struct SparsityPattern {
     pub indices: Vec<usize>,
 }
 
-pub struct FvmDiscretizer<'a, D> {
-    pub model: &'a mut FunctionalPhysics<D>,
+pub struct FvmDiscretizer<'a, D, F, R, S> {
+    pub model: &'a mut FunctionalPhysics<D, F, R, S>,
     pub mesh: &'a Mesh,
     pub bc_registry: &'a BCRegistry,
     pub dt: Option<f64>,
@@ -21,14 +21,34 @@ pub struct FvmDiscretizer<'a, D> {
     pub s_old_cache: Option<DVector<DualDVec64>>,
     pub spatial_old_cache: Option<DVector<DualDVec64>>,
     pub sparsity_pattern: SparsityPattern,
+    pub face_scales: Vec<f64>,
 }
 
-impl<'a, D> FvmDiscretizer<'a, D>
+impl<'a, D, F, R, S> FvmDiscretizer<'a, D, F, R, S>
 where
     D: 'static,
+    F: FluxFn<D>,
+    R: ReactionFn<D>,
+    S: StorageFn<D>,
 {
-    pub fn new(model: &'a mut FunctionalPhysics<D>, mesh: &'a Mesh, bc_registry: &'a BCRegistry) -> Self {
+    pub fn new(model: &'a mut FunctionalPhysics<D, F, R, S>, mesh: &'a Mesh, bc_registry: &'a BCRegistry) -> Self {
         let sparsity_pattern = Self::build_sparsity_pattern(mesh, model.num_vars_per_cell);
+
+        // Precompute face scales
+        let mut face_scales = Vec::with_capacity(mesh.faces.len());
+        for face in &mesh.faces {
+            match face.neighbor_cell_ids {
+                (k, Some(l)) => {
+                    let d = model.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
+                    face_scales.push(FunctionalPhysics::<D, F, R, S>::face_scale(face, d));
+                }
+                (k, None) => {
+                    let d = model.safe_distance(face.centroid, mesh.cells[k].centroid);
+                    face_scales.push(FunctionalPhysics::<D, F, R, S>::face_scale(face, d));
+                }
+            }
+        }
+
         Self {
             model,
             mesh,
@@ -38,6 +58,7 @@ where
             s_old_cache: None,
             spatial_old_cache: None,
             sparsity_pattern,
+            face_scales,
         }
     }
 
@@ -134,6 +155,8 @@ where
         let mut f_flux = DVector::from_vec(vec![DualDVec64::from_re(0.0); num_vars]);
 
         for (face_idx, face) in mesh.faces.iter().enumerate() {
+            let scale = self.face_scales[face_idx]; // Use precomputed scale
+
             match face.neighbor_cell_ids {
                 (k, Some(l)) => {
                     let u_k = u.rows(k * num_vars, num_vars);
@@ -147,9 +170,6 @@ where
                         face,
                         &self.model.data,
                     );
-
-                    let d = self.model.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
-                    let scale = FunctionalPhysics::<D>::face_scale(face, d);
 
                     for i in 0..num_vars {
                         let flux_val = f_flux[i].clone() * scale;
@@ -189,9 +209,6 @@ where
                         face,
                         &self.model.data,
                     );
-
-                    let d = self.model.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    let scale = FunctionalPhysics::<D>::face_scale(face, d);
 
                     // Splice the flux
                     for i in 0..num_vars {
@@ -275,14 +292,15 @@ where
         let cell = &mesh.cells[cell_id];
         for face_idx in &mesh.cell_face_ids[cell.face_start..cell.face_end] {
             let face = &mesh.faces[*face_idx];
+            let scale = self.face_scales[*face_idx]; // Use precomputed scale
+
             match face.neighbor_cell_ids {
                 (k, Some(l)) => { // internal face
                     let u_k: &[DualDVec64] = &u[(k * m)..(k * m + m)];
                     let u_l: &[DualDVec64] = &u[(l * m)..(l * m + m)];
                     for x in &mut f_flux { *x = DualDVec64::from_re(0.0); }
                     (self.model.flux)(&mut f_flux, u_k, u_l, face, &self.model.data);
-                    let d = self.model.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
-                    let scale = FunctionalPhysics::<D>::face_scale(face, d);
+
                     if cell_id == k {
                         acc_spatial += f_flux[var].clone() * scale;
                     } else if cell_id == l {
@@ -303,8 +321,6 @@ where
 
                     for x in &mut f_flux { *x = DualDVec64::from_re(0.0); }
                     (self.model.flux)(&mut f_flux, u_k, &u_boundary, face, &self.model.data);
-                    let d = self.model.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    let scale = FunctionalPhysics::<D>::face_scale(face, d);
 
                     // Splice the flux
                     for i in 0..m {
@@ -373,14 +389,16 @@ where
         let cell = &mesh.cells[cell_id];
         for &face_idx in &mesh.cell_face_ids[cell.face_start..cell.face_end] {
             let face = &mesh.faces[face_idx];
+            let scale = self.face_scales[face_idx]; // Use precomputed scale
+
             match face.neighbor_cell_ids {
                 (k, Some(l)) => {
                     if k != cell_id && l != cell_id { continue; }
                     let (uk, ul) = self.seed_face_dual(u, k, l);
                     let mut f = vec![DualDVec64::from_re(0.0); m];
                     (self.model.flux)(&mut f, &uk, &ul, face, &self.model.data);
-                    let d = self.model.safe_distance(mesh.cells[k].centroid, mesh.cells[l].centroid);
-                    let mut rd = f[var].clone() * FunctionalPhysics::<D>::face_scale(face, d);
+
+                    let mut rd = f[var].clone() * scale;
                     if cell_id == l { rd = -rd; }
                     let d_eps = rd.eps.unwrap_generic(Dyn(2 * m), U1);
 
@@ -415,8 +433,6 @@ where
 
                     let mut f = vec![DualDVec64::from_re(0.0); m];
                     (self.model.flux)(&mut f, &uk, &ubc, face, &self.model.data);
-                    let d = self.model.safe_distance(face.centroid, mesh.cells[k].centroid);
-                    let scale = FunctionalPhysics::<D>::face_scale(face, d);
 
                     // Splice the flux
                     for i in 0..m {
@@ -478,9 +494,12 @@ where
     }
 }
 
-impl<'a, D> DiscreteModel for FvmDiscretizer<'a, D>
+impl<'a, D, F, R, S> DiscreteModel for FvmDiscretizer<'a, D, F, R, S>
 where
     D: 'static + Sync,
+    F: FluxFn<D>,
+    R: ReactionFn<D>,
+    S: StorageFn<D>,
 {
     fn num_variables(&self) -> usize {
         self.model.num_vars_per_cell
@@ -503,40 +522,49 @@ where
         let u_dual: Vec<DualDVec64> = u.iter().map(|&x| DualDVec64::from_re(x)).collect();
         let u_slice = u.as_slice();
 
-        // Parallel calculation of residuals and Jacobian rows
-        let (residual_vec, data_chunks): (Vec<f64>, Vec<Vec<f64>>) = (0..n)
-            .into_par_iter()
-            .map(|r| {
-                // Local scratch space
-                let mut diag_reuse: Vec<f64> = vec![0.0; m];
+        // Pre-allocate final arrays and write directly in parallel
+        let nnz = indices.len();
+        let mut data = vec![0.0; nnz];
+        let mut residual_vec = vec![0.0; n];
 
-                // 1. Residual Component
-                let res_val = self.residual_component_row(&u_dual, r).re;
+        let data_ptr = data.as_mut_ptr() as usize;
+        let residual_ptr = residual_vec.as_mut_ptr() as usize;
 
-                // 2. Jacobian Row
-                let row_start = indptr[r];
-                let row_end = indptr[r + 1];
-                let row_indices = &indices[row_start..row_end];
+        (0..n).into_par_iter().for_each(|r| {
+            // Local scratch space
+            let mut diag_reuse: Vec<f64> = vec![0.0; m];
 
-                // Initialize row data (local vector)
-                let mut row_data = vec![0.0; row_end - row_start];
+            // 1. Residual Component
+            let res_val = self.residual_component_row(&u_dual, r).re;
+            let r_ptr = residual_ptr as *mut f64;
+            unsafe {
+                *r_ptr.add(r) = res_val;
+            }
+
+            // 2. Jacobian Row
+            let row_start = indptr[r];
+            let row_end = indptr[r + 1];
+            let row_indices = &indices[row_start..row_end];
+            let row_len = row_end - row_start;
+
+            let d_ptr = data_ptr as *mut f64;
+            unsafe {
+                // Get mutable slice for this row's data
+                let row_data = std::slice::from_raw_parts_mut(d_ptr.add(row_start), row_len);
+                // Note: row_data is already zeroed by vec![0.0; nnz] initialization
 
                 self.jacobian_row_locals(
                     u_slice,
                     r,
                     row_indices,
-                    &mut row_data,
+                    row_data,
                     &mut diag_reuse,
                 );
-
-                (res_val, row_data)
-            })
-            .unzip();
+            }
+        });
 
         // Assemble final structures
         let residual = DVector::from_vec(residual_vec);
-        let data: Vec<f64> = data_chunks.into_iter().flatten().collect();
-
         let jacobian = CsrMatrix::from_csr(n, n, indptr, indices, data);
         (residual, jacobian)
     }

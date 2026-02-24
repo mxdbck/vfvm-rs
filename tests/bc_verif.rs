@@ -7,21 +7,20 @@ use vfvm_rs::discretization::mesh::{Cell, Face, Mesh};
 use vfvm_rs::discretization::fvm::FvmDiscretizer;
 use vfvm_rs::numerics::nonlinear::NonlinearSolver;
 use vfvm_rs::physics::bc::{BCRegistry, BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
-use vfvm_rs::physics::functional::FunctionalPhysics;
+use vfvm_rs::physics::functional::{FluxFn, FunctionalPhysics, ReactionFn, StorageFn};
 use vfvm_rs::system::SolverConfig;
 use vfvm_rs::system::Preconditioner;
 
 #[derive(Clone)]
 struct LinearParams;
 
-fn setup_linear(params: LinearParams) -> FunctionalPhysics<LinearParams> {
-    let flux = Box::new(
+fn setup_linear(params: LinearParams) -> FunctionalPhysics<LinearParams, impl FluxFn<LinearParams>, impl ReactionFn<LinearParams>, impl StorageFn<LinearParams>> {
+    let flux = 
         |f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _face: &Face, _: &LinearParams| {
             f[0] = u_k[0].clone() - u_l[0].clone();
-        },
-    );
-    let reaction = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &LinearParams| f[0] = DualDVec64::from_re(0.0));
-    let storage = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &LinearParams| f[0] = DualDVec64::from_re(0.0));
+        };
+    let reaction = |f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &LinearParams| f[0] = DualDVec64::from_re(0.0);
+    let storage = |f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &LinearParams| f[0] = DualDVec64::from_re(0.0);
     FunctionalPhysics::new(vec![Field::from("u")], params, flux, reaction, storage)
 }
 

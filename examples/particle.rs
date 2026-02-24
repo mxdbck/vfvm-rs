@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use vfvm_rs::discretization::generator::create_voronoi_mesh;
 use vfvm_rs::discretization::mesh::{Cell, Face};
 use vfvm_rs::physics::bc::{Field, BCRegistry};
-use vfvm_rs::physics::functional::FunctionalPhysics;
+use vfvm_rs::physics::functional::{FluxFn, FunctionalPhysics, ReactionFn, StorageFn};
 use vfvm_rs::system::{System, InitialCondition, Geometry, SolverConfig, TransientConfig, OutputConfig};
 
 // Scaling Constants
@@ -28,36 +28,26 @@ pub struct SchrodingerParams {
 
 pub fn setup_schrodinger_physics(
     params: SchrodingerParams,
-) -> FunctionalPhysics<SchrodingerParams> {
-    let reaction = Box::new(
-        |f: &mut [DualDVec64], u: &[DualDVec64], cell: &Cell, data: &SchrodingerParams| {
-            let (psi_r, psi_i) = (&u[0], &u[1]);
-            let v_term = data.potential[cell.id] / data.hbar;
-            f[0] = -psi_i.clone() * v_term;
-            f[1] = psi_r.clone() * v_term;
-        },
-    );
+) -> FunctionalPhysics<SchrodingerParams, impl FluxFn<SchrodingerParams>, impl ReactionFn<SchrodingerParams>, impl StorageFn<SchrodingerParams>> {
+    fn reaction(f: &mut [DualDVec64], u: &[DualDVec64], cell: &Cell, data: &SchrodingerParams) {
+        let (psi_r, psi_i) = (&u[0], &u[1]);
+        let v_term = data.potential[cell.id] / data.hbar;
+        f[0] = -psi_i.clone() * v_term;
+        f[1] = psi_r.clone() * v_term;
+    }
 
-    let flux = Box::new(
-        |f: &mut [DualDVec64],
-         u_k: &[DualDVec64],
-         u_l: &[DualDVec64],
-         _face: &Face,
-         data: &SchrodingerParams| {
-            let (r_k, i_k) = (&u_k[0], &u_k[1]);
-            let (r_l, i_l) = (&u_l[0], &u_l[1]);
-            let coeff = data.hbar / (2.0 * data.mass);
-            f[0] = (i_l - i_k) * coeff;
-            f[1] = (r_k - r_l) * coeff;
-        },
-    );
+    fn flux(f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _face: &Face, data: &SchrodingerParams) {
+        let (r_k, i_k) = (&u_k[0], &u_k[1]);
+        let (r_l, i_l) = (&u_l[0], &u_l[1]);
+        let coeff = data.hbar / (2.0 * data.mass);
+        f[0] = (i_l - i_k) * coeff;
+        f[1] = (r_k - r_l) * coeff;
+    }
 
-    let storage = Box::new(
-        |f: &mut [DualDVec64], u: &[DualDVec64], _cell: &Cell, _data: &SchrodingerParams| {
-            f[0] = u[0].clone();
-            f[1] = u[1].clone();
-        },
-    );
+    fn storage(f: &mut [DualDVec64], u: &[DualDVec64], _cell: &Cell, _data: &SchrodingerParams) {
+        f[0] = u[0].clone();
+        f[1] = u[1].clone();
+    }
 
     let fields = vec![Field::from("psi_r"), Field::from("psi_i")];
     FunctionalPhysics::new(fields, params, flux, reaction, storage)
@@ -67,7 +57,7 @@ fn main() {
     env_logger::builder().format_timestamp(None).init();
     // --- Geometry ---
     let width_sim = [200.0, 100.0, 1.0];
-    let (nx, ny) = (600, 300);
+    let (nx, ny) = (200, 100);
 
     let mut generators = Vec::with_capacity(nx * ny);
     for i in 0..nx {

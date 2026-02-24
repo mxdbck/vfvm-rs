@@ -2,7 +2,7 @@ use super::semiconductor::setup_semiconductor_physics;
 use crate::discretization::generator::create_voronoi_mesh;
 use crate::discretization::mesh::Mesh;
 use crate::physics::bc::{BCRegistry, BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
-use crate::physics::functional::FunctionalPhysics;
+use crate::physics::functional::{FluxFn, FunctionalPhysics, ReactionFn, StorageFn};
 use glam::DVec3;
 use log::info;
 use nalgebra::DVector;
@@ -126,25 +126,44 @@ pub fn pn_problem_def(
 }
 
 /// A complete PN junction model that implements PhysicsModel.
-pub struct PnJunctionModel {
-    pub functional: FunctionalPhysics<PnJunctionParams>,
+pub struct PnJunctionModel<F, R, S> {
+    pub functional: FunctionalPhysics<PnJunctionParams, F, R, S>,
     pub v_applied: f64, // Applied voltage in physical units (V)
 }
 
-impl PnJunctionModel {
-    pub fn new(params: PnJunctionParams, v_applied: f64) -> Self {
+// We attach the constructor to a dummy type `<(), (), ()>`.
+// This allows us to return the un-nameable closure types using `impl Trait`
+// This is all due to the fact that we can't define structs with existential
+// `impl Trait` fields, but we can define methods that return `impl Trait`
+// on a dummy struct.
+impl PnJunctionModel<(), (), ()> {
+    pub fn new(
+        params: PnJunctionParams,
+        v_applied: f64
+    ) -> PnJunctionModel<
+        impl FluxFn<PnJunctionParams>,
+        impl ReactionFn<PnJunctionParams>,
+        impl StorageFn<PnJunctionParams>
+    > {
         let functional = setup_semiconductor_physics(params);
-        Self {
+        PnJunctionModel {
             functional,
             v_applied,
         }
     }
+}
 
+impl<F, R, S> PnJunctionModel<F, R, S> {
     /// Initialize model with mesh-calibrated tolerances.
-    pub fn with_mesh(mut self, mesh: &Mesh) -> Self {
-        self.functional.calibrate_tolerances(mesh);
-        self
-    }
+    pub fn with_mesh(mut self, mesh: &Mesh) -> Self
+        where
+            F: FluxFn<PnJunctionParams>,
+            R: ReactionFn<PnJunctionParams>,
+            S: StorageFn<PnJunctionParams>,
+        {
+            self.functional.calibrate_tolerances(mesh);
+            self
+        }
 }
 
 /// Calculate equilibrium potential from charge neutrality.

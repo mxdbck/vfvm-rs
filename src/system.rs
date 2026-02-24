@@ -3,7 +3,7 @@ use crate::discretization::fvm::FvmDiscretizer;
 use crate::numerics::nonlinear::{NonlinearSolver, SolverResult};
 use crate::numerics::transient::TransientSolver;
 use crate::physics::bc::BCRegistry;
-use crate::physics::functional::FunctionalPhysics;
+use crate::physics::functional::{FluxFn, FunctionalPhysics, ReactionFn, StorageFn};
 use crate::processing::csv_writer;
 use log::info;
 use nalgebra::DVector;
@@ -148,8 +148,8 @@ pub struct TransientConfig {
     pub step_handler: Option<Box<dyn FnMut(usize, f64, &DVector<f64>)>>,
 }
 
-pub struct System<P> {
-    pub physics: FunctionalPhysics<P>,
+pub struct System<P, F, R, S> {
+    pub physics: FunctionalPhysics<P, F, R, S>,
     pub geometry: Geometry,
     pub solver_config: SolverConfig,
     pub transient_config: Option<TransientConfig>,
@@ -158,12 +158,18 @@ pub struct System<P> {
     pub bc_registry: BCRegistry,
     pub length_scale: f64,
     pub state_scales: Vec<f64>,
-    pub summary_handler: Option<Box<dyn Fn(&System<P>, &SolverResult)>>,
+    pub summary_handler: Option<Box<dyn Fn(&System<P, F, R, S>, &SolverResult)>>,
 }
 
-impl<P: 'static + Clone + Sync> System<P> {
+impl<P, F, R, S> System<P, F, R, S>
+where
+    P: 'static + Clone + Sync,
+    F: FluxFn<P>,
+    R: ReactionFn<P>,
+    S: StorageFn<P>,
+{
     pub fn new(
-        physics: FunctionalPhysics<P>,
+        physics: FunctionalPhysics<P, F, R, S>,
         geometry: Geometry,
         solver_config: SolverConfig,
         initial_condition: InitialCondition,
@@ -322,7 +328,7 @@ impl<P: 'static + Clone + Sync> System<P> {
         info!("  State scales: {:?}", self.state_scales);
         info!("{}", "=".repeat(60));
     }
-  
+
     pub fn update_mesh(&mut self, new_mesh: Geometry, interpolated_u: DVector<f64>) {
         self.geometry = new_mesh;
         self.initial_condition = interpolated_u;
@@ -332,18 +338,18 @@ impl<P: 'static + Clone + Sync> System<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physics::bc::Field;
-    use crate::physics::functional::FunctionalPhysics;
+    use crate::physics::{bc::Field, functional::FluxFn};
+    use crate::physics::functional::{FunctionalPhysics, ReactionFn, StorageFn};
     use num_dual::DualDVec64;
     use crate::discretization::mesh::{Face, Cell};
 
     #[derive(Debug, Clone, Copy)]
     struct DummyParams;
 
-    fn create_dummy_physics() -> FunctionalPhysics<DummyParams> {
-        let flux = Box::new(|_: &mut [DualDVec64], _: &[DualDVec64], _: &[DualDVec64], _: &Face, _: &DummyParams| {});
-        let reaction = Box::new(|_: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DummyParams| {});
-        let storage = Box::new(|_: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DummyParams| {});
+    fn create_dummy_physics() -> FunctionalPhysics<DummyParams, impl FluxFn<DummyParams>, impl ReactionFn<DummyParams>, impl StorageFn<DummyParams>> {
+        let flux = |_: &mut [DualDVec64], _: &[DualDVec64], _: &[DualDVec64], _: &Face, _: &DummyParams| {};
+        let reaction = |_: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DummyParams| {};
+        let storage = |_: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DummyParams| {};
         FunctionalPhysics::new(vec![Field::from("u")], DummyParams, flux, reaction, storage)
     }
 

@@ -1,5 +1,6 @@
 use crate::discretization::fvm::FvmDiscretizer;
 use crate::numerics::nonlinear::{NonlinearSolver, SolverResult};
+use crate::physics::functional::{FluxFn, ReactionFn, StorageFn};
 use crate::system::{Preconditioner, SolverConfig, SystemError};
 use log::{error, info};
 use nalgebra::DVector;
@@ -25,14 +26,17 @@ impl Default for TransientSolver {
 }
 
 impl TransientSolver {
-    pub fn solve<F>(
+    pub fn solve<D, F, R, S>(
         &self,
-        discretizer: &mut FvmDiscretizer<F>,
+        discretizer: &mut FvmDiscretizer<'_, D, F, R, S>,
         initial_condition: DVector<f64>,
         mut callback: impl FnMut(usize, f64, &DVector<f64>),
     ) -> Result<SolverResult, SystemError>
     where
-        F: 'static + Clone + Sync,
+        D: 'static + Sync,
+        F: FluxFn<D>,
+        R: ReactionFn<D>,
+        S: StorageFn<D>,
     {
         discretizer.theta = self.theta;
 

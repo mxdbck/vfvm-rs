@@ -7,7 +7,7 @@ use vfvm_rs::discretization::mesh::{Cell, Face};
 use vfvm_rs::discretization::fvm::FvmDiscretizer;
 use vfvm_rs::numerics::nonlinear::NonlinearSolver;
 use vfvm_rs::physics::bc::{BCRegistry, BCRule, BoundarySelector, DirichletStyle, Field, GeneralizedBC};
-use vfvm_rs::physics::functional::FunctionalPhysics;
+use vfvm_rs::physics::functional::{FluxFn, FunctionalPhysics, ReactionFn, StorageFn};
 use vfvm_rs::system::{Preconditioner, SolverConfig};
 
 #[derive(Clone)]
@@ -16,12 +16,12 @@ struct DiffusionParams { k: f64 }
 
 // The PDE
 // -k * d2T/dx2 = 0
-fn setup_diffusion(params: DiffusionParams) -> FunctionalPhysics<DiffusionParams> {
-    let flux = Box::new(|f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _: &Face, data: &DiffusionParams| {
+fn setup_diffusion(params: DiffusionParams) -> FunctionalPhysics<DiffusionParams, impl FluxFn<DiffusionParams>, impl ReactionFn<DiffusionParams>, impl StorageFn<DiffusionParams>> {
+    let flux = |f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _: &Face, data: &DiffusionParams| {
         f[0] = (u_l[0].clone() - u_k[0].clone()) * data.k;
-    });
-    let reaction = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DiffusionParams| f[0] = DualDVec64::from_re(0.0));
-    let storage = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DiffusionParams| f[0] = DualDVec64::from_re(0.0));
+    };
+    let reaction = |f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DiffusionParams| f[0] = DualDVec64::from_re(0.0);
+    let storage = |f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &DiffusionParams| f[0] = DualDVec64::from_re(0.0);
     FunctionalPhysics::new(vec![Field::from("T")], params, flux, reaction, storage)
 }
 
@@ -30,14 +30,14 @@ struct PoissonParams { source: f64 }
 
 // The PDE
 // -d2u/dx2 = source
-fn setup_poisson(params: PoissonParams) -> FunctionalPhysics<PoissonParams> {
-    let flux = Box::new(|f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _: &Face, _: &PoissonParams| {
+fn setup_poisson(params: PoissonParams) -> FunctionalPhysics<PoissonParams, impl FluxFn<PoissonParams>, impl ReactionFn<PoissonParams>, impl StorageFn<PoissonParams>> {
+    let flux = |f: &mut [DualDVec64], u_k: &[DualDVec64], u_l: &[DualDVec64], _: &Face, _: &PoissonParams| {
         f[0] = -(u_l[0].clone() - u_k[0].clone());
-    });
-    let reaction = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, data: &PoissonParams| {
+    };
+    let reaction = |f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, data: &PoissonParams| {
         f[0] = DualDVec64::from_re(-data.source);
-    });
-    let storage = Box::new(|f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &PoissonParams| f[0] = DualDVec64::from_re(0.0));
+    };
+    let storage = |f: &mut [DualDVec64], _: &[DualDVec64], _: &Cell, _: &PoissonParams| f[0] = DualDVec64::from_re(0.0);
     FunctionalPhysics::new(vec![Field::from("u")], params, flux, reaction, storage)
 }
 

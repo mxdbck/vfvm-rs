@@ -4,17 +4,19 @@ use log::{info, warn};
 use num_dual::DualDVec64;
 use std::collections::HashMap;
 
-// Type aliases for our function signatures to keep things clean.
-// Using concrete DualDVec64 type for automatic differentiation.
+pub trait FluxFn<D>: Fn(&mut [DualDVec64], &[DualDVec64], &[DualDVec64], &Face, &D) + Sync + Send {}
+pub trait ReactionFn<D>: Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send {}
+pub trait StorageFn<D>: Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send {}
 
-// Flux function: f(flux_vector, u_left, u_right, face_geometry, user_data)
-pub type FluxFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &[DualDVec64], &Face, &D) + Sync + Send>;
+// Implementations for any closure that matches the signature
+impl<D, T> FluxFn<D> for T
+where T: Fn(&mut [DualDVec64], &[DualDVec64], &[DualDVec64], &Face, &D) + Sync + Send {}
 
-// Reaction/Source function: f(source_vector, u, cell_geometry, user_data)
-pub type ReactionFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send>;
+impl<D, T> ReactionFn<D> for T
+where T: Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send {}
 
-// Storage function (for time-dependent term): f(storage_vector, u, cell_geometry, user_data)
-pub type StorageFn<D> = Box<dyn Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send>;
+impl<D, T> StorageFn<D> for T
+where T: Fn(&mut [DualDVec64], &[DualDVec64], &Cell, &D) + Sync + Send {}
 
 /// Action to take at a boundary for a specific variable.
 pub enum BoundaryAction {
@@ -45,29 +47,32 @@ impl Default for NumericalTolerances {
 /// A PhysicsModel configured by user-defined functions (closures).
 /// Uses concrete `DualDVec64` type for automatic differentiation.
 /// `D` is a generic type for any user-defined data/parameters struct.
-pub struct FunctionalPhysics<D> {
+pub struct FunctionalPhysics<D, F, R, S> {
     pub num_vars_per_cell: usize,
     pub data: D,
-    pub flux: FluxFn<D>,
-    pub reaction: ReactionFn<D>,
+    pub flux: F,
+    pub reaction: R,
     #[allow(unused)]
-    pub storage: StorageFn<D>,
+    pub storage: S,
     pub face_tags: HashMap<usize, String>,
     pub field_names: Vec<Field>,
     pub current_time: Option<f64>,
     pub tolerances: NumericalTolerances,
 }
 
-impl<D> FunctionalPhysics<D>
+impl<D, F, R, S> FunctionalPhysics<D, F, R, S>
 where
     D: 'static,
+    F: FluxFn<D>,
+    R: ReactionFn<D>,
+    S: StorageFn<D>,
 {
     pub fn new(
         field_names: Vec<Field>,
         data: D,
-        flux: FluxFn<D>,
-        reaction: ReactionFn<D>,
-        storage: StorageFn<D>,
+        flux: F,
+        reaction: R,
+        storage: S,
     ) -> Self {
         let num_vars = field_names.len();
         Self {
