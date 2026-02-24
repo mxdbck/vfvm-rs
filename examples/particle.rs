@@ -64,10 +64,10 @@ pub fn setup_schrodinger_physics(
 }
 
 fn main() {
-    env_logger::init();
+    env_logger::builder().format_timestamp(None).init();
     // --- Geometry ---
     let width_sim = [200.0, 100.0, 1.0];
-    let (nx, ny) = (200, 100);
+    let (nx, ny) = (600, 300);
 
     let mut generators = Vec::with_capacity(nx * ny);
     for i in 0..nx {

@@ -73,7 +73,7 @@ fn setup_electrostatics(params: CapacitorParams) -> FunctionalPhysics<CapacitorP
 }
 
 fn main() {
-    env_logger::init();
+    env_logger::builder().format_timestamp(None).init();
     let output_dir = "output/capacitor";
 
     let domain = [3.0, 3.0];

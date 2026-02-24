@@ -5,7 +5,7 @@ use vfvm_rs::processing::csv_writer;
 use vfvm_rs::system::{System, InitialCondition, Geometry, SolverConfig, OutputConfig};
 
 fn main() {
-    env_logger::init();
+    env_logger::builder().format_timestamp(None).init();
     let mesh_size = 1.0;
     let num_points = 500;
 
