@@ -5,14 +5,16 @@ mod physics;
 mod processing;
 mod system;
 
-use crate::models::pn::pn::{PnJunctionModel, create_pn_bc_registry, create_pn_initial_condition, tag_pn_boundary_faces};
+use crate::models::pn::pn::{
+    PnJunctionModel, create_pn_bc_registry, create_pn_initial_condition, tag_pn_boundary_faces,
+};
 use crate::processing::summary::SimulationSummary;
-use crate::system::{System, InitialCondition, Geometry, SolverConfig, OutputConfig};
+use crate::system::{Geometry, InitialCondition, OutputConfig, SolverConfig, System};
 use log::{error, info};
 use std::path::PathBuf;
 
 fn main() {
-    env_logger::init();
+    env_logger::builder().format_timestamp(None).init();
     let (mesh, params) = models::pn::pn::pn_problem_def(1.0, 1000);
 
     let v_applied = 1e-4;
